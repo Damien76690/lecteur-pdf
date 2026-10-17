@@ -149,7 +149,10 @@ def ocr_pdf(src_path, dst_path, language="fra+eng", dpi=300):
             subprocess.run([tesseract, png, base, "-l", language, "pdf"], check=True,
                            capture_output=True,
                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-            with pymupdf.open(base + ".pdf") as ocr_page:
+            # Lu en mémoire : sous Windows, un fichier encore ouvert ne peut pas être supprimé.
+            with open(base + ".pdf", "rb") as fh:
+                data = fh.read()
+            with pymupdf.open("pdf", data) as ocr_page:
                 new = out.new_page(width=page.rect.width, height=page.rect.height)
                 new.show_pdf_page(new.rect, ocr_page, 0)
     out.save(dst_path, garbage=3, deflate=True)
