@@ -1,15 +1,16 @@
-// Tests de la version en ligne : npm ci && npm test
+// Tests de la version en ligne : npm ci && npm test (lancés aussi avant chaque publication)
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import * as mupdf from "mupdf";
 import * as PDFLib from "pdf-lib";
 import XLSX from "xlsx";
 import * as docx from "docx";
 import * as core from "../../web/core.js";
+import { makeExamples } from "../../scripts/exemples.mjs";
 
 core.init({ mupdf, PDFLib });
-const facture = () => new Uint8Array(readFileSync(new URL("../../exemples/facture.pdf", import.meta.url)));
+const examples = await makeExamples();
+const facture = () => examples["facture.pdf"];
 const text = bytes => core.toText(core.extractRows(bytes));
 
 test("remplacer supprime vraiment l'ancien texte", async () => {
@@ -57,7 +58,7 @@ test("nombres à la française", () => {
 });
 
 test("un scan est détecté comme ayant besoin de l'OCR", () => {
-  const scan = new Uint8Array(readFileSync(new URL("../../exemples/facture-scannee.pdf", import.meta.url)));
+  const scan = examples["facture-scannee.pdf"];
   assert.ok(core.needsOcr(core.pageInfo(scan)));
   assert.ok(!core.needsOcr(core.pageInfo(facture())));
 });
