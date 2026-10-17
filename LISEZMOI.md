@@ -12,7 +12,7 @@ La première reconnaissance de texte télécharge environ 4 Mo de données de la
 
 Pour les développeurs : le code est dans `web/` (`core.js` = traitements, `app.js` = interface).
 `npm ci && npm test` lance les tests, `npm run build` prépare le site dans `dist/`.
-Chaque modification fusionnée dans `main` est publiée automatiquement.
+Le site est hébergé sur Vercel (projet `lecteur-pdf-libre`) ; les tests sont relancés avant chaque publication et la bloquent s'ils échouent.
 
 ## Version à installer (Python)
 
