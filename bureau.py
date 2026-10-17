@@ -131,18 +131,22 @@ def main():
                     print("Attente de la fenêtre :", repr(e))
                 threading.Event().wait(1)
             print("Délai dépassé :", expression, flush=True)
-            print("Message affiché :", 
+            print("Message affiché :",
                   window.evaluate_js("document.querySelector('#msg') && document.querySelector('#msg').textContent"))
             return False
 
         def essai(window):
             print("Fenêtre ouverte, attente du lecteur…", flush=True)
-            # Le lecteur (MuPDF) doit se charger sans Internet, puis ouvrir la facture d'exemple.
-            if attendre(window, "!!(window.pywebview && window.pywebview.api && window.pywebview.api.enregistrer)"
-                                " && /Ouvrez un PDF/.test(document.querySelector('#msg').textContent)"):
-                window.evaluate_js("document.querySelector('#sample').click()")
-                resultat["ok"] = attendre(window, "document.querySelectorAll('#pages .page img[src]').length > 0")
-            window.destroy()
+            try:
+                # Le lecteur (MuPDF) doit se charger sans Internet, puis ouvrir la facture d'exemple.
+                if attendre(window, "!!(window.pywebview && window.pywebview.api && window.pywebview.api.enregistrer)"
+                                    " && /Ouvrez un PDF/.test(document.querySelector('#msg').textContent)"):
+                    window.evaluate_js("document.querySelector('[data-sample=facture]').click()")
+                    resultat["ok"] = attendre(window, "document.querySelectorAll('#pages .page img[src]').length > 0")
+            except Exception as e:
+                print("Erreur pendant l'essai :", repr(e), flush=True)
+            finally:
+                window.destroy()
 
     webview.start(essai, api._window, gui="edgechromium" if sys.platform == "win32" else None)
     if essai:
