@@ -170,7 +170,14 @@ $("#ocr").onclick = async () => {
   const j = await call(`/api/${doc.id}/ocr`, {method:"POST"}, "Reconnaissance du texte en cours (peut prendre un moment par page)…");
   if (j) { doc = j; render(); say(j.message); }
 };
-$$("[data-dl]").forEach(b => b.onclick = () => {
+$$("[data-dl]").forEach(b => b.onclick = async () => {
+  if (window.pywebview?.api) {  // application Windows : fenêtre « Enregistrer sous »
+    busy(true); say(b.dataset.dl === "pdf" ? "Enregistrement…" : "Conversion en cours…");
+    try { say((await pywebview.api.enregistrer(doc.id, b.dataset.dl)).message); }
+    catch (e) { say("Erreur : " + (e.message || e), true); }
+    finally { busy(false); setButtons(); }
+    return;
+  }
   say(b.dataset.dl === "pdf" ? "Téléchargement…" : "Conversion en cours, le téléchargement va démarrer…");
   location.href = `/api/${doc.id}/download/${b.dataset.dl}`;
 });
