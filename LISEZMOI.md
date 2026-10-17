@@ -14,13 +14,16 @@ Le site est hébergé sur Vercel (projet `lecteur-pdf-libre`) ; les tests sont r
 
 ## Les menus
 
-Les commandes sont rangées dans des onglets, comme dans Word : **Fichier**, **Accueil**, **Modifier**, **Pages** et **Convertir**.
+Les commandes sont rangées dans des onglets, comme dans Word : **Fichier**, **Accueil**, **Commenter**, **Signer**, **Modifier**, **Pages** et **Convertir**.
 
 | Fonction | Où |
 |---|---|
 | Ouvrir, enregistrer, fermer | **Fichier** ou **Accueil** (Ctrl+O, Ctrl+S) |
 | Annuler, rétablir | **Accueil** (Ctrl+Z, Ctrl+Y) |
 | Zoom, largeur de page, page entière, aller à une page | **Accueil** |
+| Surligner, souligner, barrer du texte | **Commenter**, puis faites glisser sur le texte |
+| Note, zone de texte, crayon, rectangle, ellipse, flèche, tampon (Approuvé, Payé…) | **Commenter** ; **Liste** affiche, modifie et supprime les commentaires |
+| Signer, parapher, dater | **Signer** : dessinez, tapez ou importez votre signature une fois, puis cliquez sur la page |
 | Écrire sur la page (taille et couleur réglables) | **Modifier › Écrire**, puis cliquez à l'endroit voulu |
 | Corriger un texte | **Modifier** : Rechercher / Remplacer par, puis **Remplacer** (toutes les occurrences) |
 | Effacer une zone | **Modifier › Effacer une zone**, puis tracez un rectangle (le contenu est réellement supprimé) |
@@ -60,6 +63,9 @@ python pdftools.py remplacer document.pdf "ancien" "nouveau"
 ```
 
 ## Bon à savoir
+
+- **Signature** : c'est une image posée sur le document. Elle convient pour un document courant mais n'a pas la valeur d'une signature électronique qualifiée (contrat engageant). Elle est mémorisée uniquement sur votre appareil.
+- **Commentaires** : ce sont des annotations PDF standard, visibles et modifiables dans Adobe Reader, Edge, Chrome, etc.
 
 - **Excel** : chaque tableau trouvé devient une feuille, les nombres « 1 234,56 » deviennent de vrais nombres. Sans tableau, le texte est mis en colonnes dans une feuille « Texte ».
 - **Remplacer** écrit le nouveau texte en Helvetica à la même taille et couleur : la police d'origine n'est pas toujours conservée.
