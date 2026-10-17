@@ -12,7 +12,16 @@ Petit logiciel libre qui tourne **sur votre ordinateur** (rien n'est envoyé sur
 | PDF scanné → texte | **Reconnaître le texte (OCR)** : le PDF devient sélectionnable, modifiable et convertible |
 | Convertir | **Enregistrer : PDF / Word / Excel / Texte** |
 
-## Installation (une seule fois)
+## Application Windows (le plus simple)
+
+1. Téléchargez **[LecteurPDF-installation.exe](https://github.com/Damien76690/lecteur-pdf/releases/latest/download/LecteurPDF-installation.exe)**.
+2. Double-cliquez dessus. Si Windows affiche « Windows a protégé votre ordinateur », cliquez sur **Informations complémentaires** puis **Exécuter quand même** (l'application n'est pas encore signée).
+3. Suivez les étapes : aucun droit administrateur n'est demandé. Lancez ensuite **Lecteur PDF libre** depuis le menu Démarrer ou l'icône du Bureau.
+
+Tout est inclus, y compris la reconnaissance de texte (OCR) en français : rien d'autre à installer. Les fichiers de travail sont rangés dans `%LOCALAPPDATA%\LecteurPDF`.
+Une version sans installation existe aussi : [LecteurPDF-portable.zip](https://github.com/Damien76690/lecteur-pdf/releases/latest/download/LecteurPDF-portable.zip) (décompressez, puis double-cliquez sur `LecteurPDF.exe`).
+
+## Installation depuis le code source (Windows, Mac, Linux)
 
 1. Installez **Python 3** : https://www.python.org/downloads/ (sous Windows, cochez « Add Python to PATH »).
 2. Pour l'OCR, installez **Tesseract** avec la langue française :
@@ -26,6 +35,12 @@ Petit logiciel libre qui tourne **sur votre ordinateur** (rien n'est envoyé sur
 - Mac / Linux : `./lancer-mac-linux.sh`
 
 La première fois, les composants s'installent (une minute environ). Le navigateur s'ouvre ensuite sur http://127.0.0.1:5000. Fermez la fenêtre noire pour arrêter.
+
+Pour avoir la même fenêtre que l'application Windows sans navigateur : `pip install -r requirements-bureau.txt` puis `python bureau.py`.
+
+## Fabrication de l'application Windows
+
+Elle est compilée automatiquement par GitHub (fichier `.github/workflows/windows.yml`) à chaque modification de la branche `main`, puis publiée dans **Releases**. Recette : `windows/lecteur-pdf.spec` (PyInstaller) et `windows/installateur.iss` (Inno Setup).
 
 ## En ligne de commande (optionnel)
 
