@@ -295,7 +295,7 @@ function layoutRows(lines) {
 
 // « 1 234,56 € » -> 1234.56 ; renvoie le texte tel quel si ce n'est pas un nombre.
 export function toNumber(text) {
-  let t = text.replace(/[\s  €$£]/g, "");
+  let t = text.replace(/[\s\u00a0\u202f€$£]/g, "");
   if (/^[-+]?\d{1,3}(\.\d{3})+,\d+$/.test(t)) t = t.replace(/\./g, "");
   if (!/^[-+]?\d+([.,]\d+)?$/.test(t) || /^[-+]?0\d/.test(t)) return text;
   return parseFloat(t.replace(",", "."));
