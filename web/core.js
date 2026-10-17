@@ -181,10 +181,11 @@ export async function replaceText(bytes, old, neu) {
   return { bytes: out.bytes, count: writes.length };
 }
 
-export async function rotatePage(bytes, index) {
+// Pivote la page de `angle` degrés dans le sens des aiguilles d'une montre (90, 180 ou 270).
+export async function rotatePage(bytes, index, angle = 90) {
   return (await withPdfLib(bytes, doc => {
     const page = doc.getPage(index);
-    page.setRotation(PDFLib.degrees((page.getRotation().angle + 90) % 360));
+    page.setRotation(PDFLib.degrees((page.getRotation().angle + angle) % 360));
   })).bytes;
 }
 

@@ -1,23 +1,26 @@
-"""Lecteur PDF libre : version application de bureau (fenêtre Windows, sans navigateur).
+"""Lecteur PDF libre : application de bureau (fenêtre Windows, sans navigateur).
 
-Lancement :  python bureau.py        (nécessite  pip install pywebview)
+Elle affiche exactement la version en ligne (dossier web/), servie depuis l'ordinateur :
+tout fonctionne sans Internet, OCR compris, et chaque fonction n'est écrite qu'une fois.
+
+Préparation :  npm ci && npm run build -- build/site      puis  pip install -r requirements-bureau.txt
+Lancement :  python bureau.py
 Vérification sans fenêtre :  python bureau.py --verifier
-Essai de la fenêtre (s'ouvre puis se ferme seule) :  python bureau.py --essai-fenetre
+Essai de la fenêtre (ouvre la facture d'exemple puis se ferme seule) :  python bureau.py --essai-fenetre
 C'est ce fichier que l'application Windows (LecteurPDF.exe) exécute.
 """
+import base64
+import functools
 import os
-import shutil
-import socket
 import sys
 import threading
+import urllib.request
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
-# Fichiers de travail dans le profil de l'utilisateur (le dossier du programme
-# n'est pas modifiable une fois installé dans « Program Files »).
-os.environ.setdefault("LECTEUR_PDF_TRAVAIL", os.path.join(
-    os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "LecteurPDF", "travail"))
-
-import app as serveur  # noqa: E402
-import pdftools  # noqa: E402
+ICI = os.path.dirname(os.path.abspath(__file__))
+SITE = os.path.join(getattr(sys, "_MEIPASS", ICI), "site") if hasattr(sys, "_MEIPASS") \
+    else os.path.join(ICI, "build", "site")
+JOURNAL = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "LecteurPDF", "journal.txt")
 
 FILTRES = {
     "pdf": "Document PDF (*.pdf)",
@@ -27,52 +30,82 @@ FILTRES = {
 }
 
 
+class Pages(SimpleHTTPRequestHandler):
+    """Sert le site sur 127.0.0.1 uniquement (rien n'est accessible depuis le réseau)."""
+    extensions_map = {**SimpleHTTPRequestHandler.extensions_map,
+                      ".js": "text/javascript", ".mjs": "text/javascript", ".wasm": "application/wasm",
+                      ".gz": "application/gzip"}
+
+    def end_headers(self):
+        self.send_header("Cache-Control", "no-store")
+        super().end_headers()
+
+    def log_message(self, *args):
+        pass
+
+
+def demarrer_serveur():
+    if not os.path.isfile(os.path.join(SITE, "index.html")):
+        raise SystemExit(f"Site introuvable dans {SITE} : lancez d'abord  npm run build -- build/site")
+    serveur = ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(Pages, directory=SITE))
+    threading.Thread(target=serveur.serve_forever, daemon=True).start()
+    return f"http://127.0.0.1:{serveur.server_address[1]}/"
+
+
 class Api:
     """Fonctions appelées depuis la page (window.pywebview.api...)."""
 
     def __init__(self):
         self._window = None
 
-    def enregistrer(self, doc_id, fmt):
+    def enregistrer(self, nom, contenu_base64):
         import webview
-        with serveur.app.test_request_context():
-            path, name = serveur.export(doc_id, fmt)
+        fmt = nom.rsplit(".", 1)[-1].lower()
         choix = self._window.create_file_dialog(
-            webview.FileDialog.SAVE, save_filename=name, file_types=(FILTRES[fmt],))
+            webview.FileDialog.SAVE, save_filename=nom, file_types=(FILTRES.get(fmt, "Tous les fichiers (*.*)"),))
         if not choix:
             return {"message": "Enregistrement annulé."}
         dest = choix if isinstance(choix, str) else choix[0]
         if not dest.lower().endswith("." + fmt):
             dest += "." + fmt
-        shutil.copyfile(path, dest)
+        with open(dest, "wb") as f:
+            f.write(base64.b64decode(contenu_base64))
         return {"message": f"Enregistré : {dest}"}
 
 
-def port_libre():
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
 def verifier():
-    """Contrôle que tout fonctionne dans l'application installée (utilisé par la compilation)."""
-    import tempfile
-    exemples = os.path.join(getattr(sys, "_MEIPASS", serveur.HERE), "exemples")
-    tmp = tempfile.mkdtemp()
-    pdftools.to_word(os.path.join(exemples, "facture.pdf"), os.path.join(tmp, "f.docx"))
-    assert pdftools.to_excel(os.path.join(exemples, "facture.pdf"), os.path.join(tmp, "f.xlsx")) == 1, "Excel"
-    client = serveur.app.test_client()
-    assert client.get("/").status_code == 200, "page"
-    scan = os.path.join(exemples, "facture-scannee.pdf")
-    pdftools.ocr_pdf(scan, os.path.join(tmp, "ocr.pdf"))
-    assert "Dupont" in pdftools.extract_text(os.path.join(tmp, "ocr.pdf")), "OCR"
+    """Contrôle que l'application installée contient tout le site (utilisé par la compilation)."""
+    url = demarrer_serveur()
+    attendus = {
+        "": "text/html", "app.js": "text/javascript", "core.js": "text/javascript",
+        "vendor/mupdf/mupdf-wasm.wasm": "application/wasm",
+        "vendor/tesseract/lang/fra.traineddata.gz": "application/gzip",
+        "exemples/facture.pdf": "application/pdf",
+    }
+    for chemin, type_attendu in attendus.items():
+        print("Vérification :", chemin or "index.html", flush=True)
+        with urllib.request.urlopen(url + chemin, timeout=20) as r:
+            assert r.status == 200 and r.headers["Content-Type"].startswith(type_attendu), chemin
+            assert len(r.read()) > 0, chemin
     print("Tout fonctionne.")
+
+
+def garde_fou(secondes):
+    """Arrête le programme s'il reste bloqué (essais automatiques uniquement)."""
+    def arret():
+        print(f"Bloqué depuis {secondes} s : arrêt.", flush=True)
+        os._exit(3)
+    t = threading.Timer(secondes, arret)
+    t.daemon = True
+    t.start()
 
 
 def main():
     if sys.stdout is None:  # application sans console : messages dans journal.txt
-        journal = os.path.join(os.path.dirname(serveur.WORK), "journal.txt")
-        sys.stdout = sys.stderr = open(journal, "w", encoding="utf-8", buffering=1)
+        os.makedirs(os.path.dirname(JOURNAL), exist_ok=True)
+        sys.stdout = sys.stderr = open(JOURNAL, "w", encoding="utf-8", buffering=1)
+    if "--verifier" in sys.argv or "--essai-fenetre" in sys.argv:
+        garde_fou(240)
     if "--verifier" in sys.argv:
         try:
             verifier()
@@ -82,32 +115,42 @@ def main():
         return
 
     import webview
-    port = port_libre()
-    threading.Thread(target=lambda: serveur.app.run(host="127.0.0.1", port=port),
-                     daemon=True).start()
     api = Api()
-    api._window = webview.create_window("Lecteur PDF libre", f"http://127.0.0.1:{port}",
+    api._window = webview.create_window("Lecteur PDF libre", demarrer_serveur(),
                                        js_api=api, width=1280, height=860, min_size=(800, 500))
     essai = None
     if "--essai-fenetre" in sys.argv:
         resultat = {}
 
-        def essai(window):
-            # Attend que la page et le pont JavaScript soient prêts, puis ferme.
-            for _ in range(60):
+        def attendre(window, expression, secondes=90):
+            for _ in range(secondes):
                 try:
-                    if window.evaluate_js("!!(window.pywebview && window.pywebview.api && window.pywebview.api.enregistrer"
-                                          " && document.querySelector('#file'))"):
-                        resultat["ok"] = True
-                        break
+                    if window.evaluate_js(expression):
+                        return True
                 except Exception as e:
                     print("Attente de la fenêtre :", repr(e))
                 threading.Event().wait(1)
-            window.destroy()
+            print("Délai dépassé :", expression, flush=True)
+            print("Message affiché :",
+                  window.evaluate_js("document.querySelector('#msg') && document.querySelector('#msg').textContent"))
+            return False
+
+        def essai(window):
+            print("Fenêtre ouverte, attente du lecteur…", flush=True)
+            try:
+                # Le lecteur (MuPDF) doit se charger sans Internet, puis ouvrir la facture d'exemple.
+                if attendre(window, "!!(window.pywebview && window.pywebview.api && window.pywebview.api.enregistrer)"
+                                    " && /Ouvrez un PDF/.test(document.querySelector('#msg').textContent)"):
+                    window.evaluate_js("document.querySelector('[data-sample=facture]').click()")
+                    resultat["ok"] = attendre(window, "document.querySelectorAll('#pages .page img[src]').length > 0")
+            except Exception as e:
+                print("Erreur pendant l'essai :", repr(e), flush=True)
+            finally:
+                window.destroy()
 
     webview.start(essai, api._window, gui="edgechromium" if sys.platform == "win32" else None)
     if essai:
-        print("Fenêtre OK" if resultat.get("ok") else "Fenêtre : la page ne s'est pas chargée")
+        print("Fenêtre OK" if resultat.get("ok") else "Fenêtre : le lecteur ne s'est pas chargé")
         sys.exit(0 if resultat.get("ok") else 1)
 
 

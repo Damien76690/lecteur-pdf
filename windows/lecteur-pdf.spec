@@ -1,26 +1,22 @@
 # Recette PyInstaller de l'application Windows (utilisée par .github/workflows/windows.yml).
-# Le dossier build/tesseract (Tesseract + langues fra/eng) est préparé avant la compilation.
+# L'application affiche la version en ligne : le site est préparé avant dans build/site
+# (npm run build -- build/site), OCR et langues compris.
 import os
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 RACINE = os.path.abspath(os.path.join(SPECPATH, ".."))
-TESSERACT = os.path.join(RACINE, "build", "tesseract")
+SITE = os.path.join(RACINE, "build", "site")
+assert os.path.isfile(os.path.join(SITE, "index.html")), "lancez d'abord : npm run build -- build/site"
 
 donnees = [
-    (os.path.join(RACINE, "templates"), "templates"),
-    (os.path.join(RACINE, "exemples"), "exemples"),
+    (SITE, "site"),
     (os.path.join(RACINE, "LICENSE"), "."),
 ]
-if os.path.isdir(TESSERACT):
-    donnees.append((TESSERACT, "tesseract"))
-donnees += collect_data_files("pdfminer") + collect_data_files("pdf2docx")
 
 a = Analysis(
     [os.path.join(RACINE, "bureau.py")],
     pathex=[RACINE],
     datas=donnees,
-    hiddenimports=collect_submodules("pdf2docx") + ["webview.platforms.edgechromium",
-                                                    "webview.platforms.winforms"],
+    hiddenimports=["webview.platforms.edgechromium", "webview.platforms.winforms"],
     excludes=["tkinter", "matplotlib", "IPython", "pytest"],
 )
 pyz = PYZ(a.pure)

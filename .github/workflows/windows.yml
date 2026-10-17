@@ -21,35 +21,33 @@ jobs:
         with:
           python-version: "3.12"
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Tests et préparation du site (le même que la version en ligne)
+        run: |
+          npm ci
+          npm test
+          npm run build -- build/site
+
       - name: Installer les composants Python
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt -r requirements-bureau.txt pyinstaller pytest
+          pip install -r requirements-bureau.txt pyinstaller
 
-      - name: Installer Tesseract (OCR) avec le français
-        shell: pwsh
-        run: |
-          choco install tesseract -y --no-progress
-          $src = "C:\Program Files\Tesseract-OCR"
-          Invoke-WebRequest "https://github.com/tesseract-ocr/tessdata/raw/main/fra.traineddata" -OutFile "$src\tessdata\fra.traineddata"
-          $dst = "build\tesseract"
-          New-Item -ItemType Directory -Force "$dst\tessdata" | Out-Null
-          Copy-Item "$src\tesseract.exe", "$src\*.dll" $dst
-          Copy-Item "$src\tessdata\configs", "$src\tessdata\pdf.ttf" "$dst\tessdata" -Recurse
-          Copy-Item "$src\tessdata\eng.traineddata", "$src\tessdata\fra.traineddata", "$src\tessdata\osd.traineddata" "$dst\tessdata"
-          Get-ChildItem $dst -Recurse | Measure-Object Length -Sum | ForEach-Object { "Tesseract embarqué : {0:N0} Mo" -f ($_.Sum / 1MB) }
-          "$src" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
-
-      - name: Tests
-        run: python -m pytest -q tests
+      - name: Vérifier le site servi par bureau.py (avant compilation)
+        timeout-minutes: 3
+        run: python bureau.py --verifier
 
       - name: Compiler LecteurPDF.exe
         run: pyinstaller --noconfirm --distpath dist --workpath build\pyinstaller windows\lecteur-pdf.spec
 
-      - name: Vérifier l'application compilée (OCR, Word, Excel)
+      - name: Vérifier l'application compilée (site complet, ouverture d'un PDF)
+        timeout-minutes: 10
         shell: pwsh
         run: |
-          $env:PATH = "C:\Windows\System32;C:\Windows"   # Tesseract système invisible : on teste celui embarqué
           $p = Start-Process "dist\LecteurPDF\LecteurPDF.exe" -ArgumentList "--verifier" -Wait -PassThru
           Get-Content "$env:LOCALAPPDATA\LecteurPDF\journal.txt" -ErrorAction SilentlyContinue | Select-Object -Last 30
           if ($p.ExitCode -ne 0) { throw "La vérification a échoué (code $($p.ExitCode))" }
@@ -88,7 +86,7 @@ jobs:
 
             **Sans installation :** `LecteurPDF-portable.zip`, à décompresser, puis double-clic sur `LecteurPDF.exe`.
 
-            La reconnaissance de texte (OCR, français et anglais) est incluse.
+            La reconnaissance de texte (OCR, français et anglais) est incluse et tout fonctionne sans Internet.
           files: |
             dist/LecteurPDF-installation.exe
             dist/LecteurPDF-portable.zip

@@ -15,3 +15,15 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build
+
+  # Outil en ligne de commande Python (pdftools.py), facultatif.
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: sudo apt-get update && sudo apt-get install -y tesseract-ocr tesseract-ocr-fra
+      - run: pip install -r requirements.txt pytest
+      - run: python -m pytest -q tests
