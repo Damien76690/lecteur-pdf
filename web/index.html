@@ -46,6 +46,38 @@
   .page .bar { position:absolute; top:-1px; right:-1px; display:flex; gap:2px; opacity:.85; }
   .page .bar button { padding:2px 6px; font-size:12px; }
   .page .num { position:absolute; bottom:-18px; left:0; right:0; text-align:center; color:var(--muted); font-size:12px; }
+  .ic.hl { background:#ffd400; padding:0 3px; }
+  .legal { max-width:260px; font-size:12px; color:var(--muted); margin:0; white-space:normal; line-height:1.35; }
+  button.link { border:none; background:none; color:var(--accent); padding:0; text-decoration:underline; font-size:inherit; }
+  main { display:flex; align-items:flex-start; }
+  main #pages { flex:1; min-width:0; }
+  #list { position:sticky; top:150px; width:300px; max-height:calc(100vh - 170px); overflow:auto; margin:8px 12px 0 0;
+          background:var(--panel); border:1px solid var(--border); border-radius:10px; }
+  .list-head { display:flex; justify-content:space-between; align-items:center; padding:8px 10px; border-bottom:1px solid var(--border); }
+  .list-head button { border:none; padding:2px 6px; }
+  .item { padding:8px 10px; border-bottom:1px solid var(--border); cursor:pointer; }
+  .item:hover { background:var(--bg); }
+  .item .what { font-size:12px; color:var(--muted); display:flex; justify-content:space-between; gap:6px; }
+  .item .what span { white-space:nowrap; }
+  .item .txt { margin-top:3px; overflow-wrap:anywhere; }
+  .item .acts { display:flex; gap:4px; }
+  .item .acts button { padding:1px 6px; font-size:12px; }
+  .empty { padding:12px; color:var(--muted); }
+  .note-hit { position:absolute; cursor:help; }
+  svg.draft { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; overflow:visible; }
+  .mode-highlight .page img, .mode-underline .page img, .mode-strike .page img { cursor:text; }
+  .mode-ink .page img, .mode-rect .page img, .mode-ellipse .page img, .mode-arrow .page img { cursor:crosshair; }
+  .mode-note .page img, .mode-textbox .page img, .mode-stamp .page img, .mode-sign .page img,
+  .mode-initials .page img, .mode-date .page img { cursor:copy; }
+  .drawing .page { touch-action:none; }
+  .seg { display:flex; gap:4px; margin:8px 0; }
+  dialog h3 { margin:0 0 4px; font-size:16px; }
+  dialog canvas { width:100%; aspect-ratio:3; border:1px dashed var(--border); border-radius:8px; background:#fff; touch-action:none; margin-top:6px; }
+  dialog input[type=text] { width:100%; }
+  .hint { font-size:12px; color:var(--muted); margin-top:4px; }
+  .check { display:block; margin-top:10px; font-size:13px; }
+  #sign-dlg { max-width:min(560px, 94vw); width:560px; }
+  @media (max-width: 700px) { #list { position:fixed; left:8px; right:8px; bottom:8px; top:auto; width:auto; max-height:45vh; margin:0; z-index:20; } }
   .sel { position:absolute; border:2px dashed #dc2626; background:rgba(220,38,38,.1); pointer-events:none; }
   .mode-text .page img { cursor:text; } .mode-erase .page img { cursor:crosshair; }
   .mode-erase .page { touch-action:none; }
@@ -68,6 +100,8 @@
     <nav class="tabs" role="tablist" aria-label="Menus">
       <button role="tab" data-tab="fichier">Fichier</button>
       <button role="tab" data-tab="accueil" class="on">Accueil</button>
+      <button role="tab" data-tab="commenter">Commenter</button>
+      <button role="tab" data-tab="signer">Signer</button>
       <button role="tab" data-tab="modifier">Modifier</button>
       <button role="tab" data-tab="pages">Pages</button>
       <button role="tab" data-tab="convertir">Convertir</button>
@@ -113,6 +147,54 @@
         <button id="next" title="Page suivante">▼</button>
       </div><span class="gl">Navigation</span></div>
     </section>
+    <section data-panel="commenter" hidden>
+      <div class="group"><div class="tools">
+        <button class="big" data-mode="highlight" title="Faites glisser sur le texte à surligner"><span class="ic hl">ab</span>Surligner</button>
+        <button class="big" data-mode="underline" title="Faites glisser sur le texte à souligner"><span class="ic"><u>ab</u></span>Souligner</button>
+        <button class="big" data-mode="strike" title="Faites glisser sur le texte à barrer"><span class="ic"><s>ab</s></span>Barrer</button>
+        <select id="hl-color" title="Couleur du surligneur (souligner et barrer prennent la couleur des dessins)">
+          <option value="#ffd400">Jaune</option><option value="#7ee07e">Vert</option>
+          <option value="#7ec8ff">Bleu</option><option value="#ff9ed2">Rose</option>
+        </select>
+      </div><span class="gl">Texte</span></div>
+      <div class="group"><div class="tools">
+        <button class="big" data-mode="note" title="Cliquez pour poser une note"><span class="ic">🗨</span>Note</button>
+        <button class="big" data-mode="textbox" title="Cliquez pour ajouter une zone de texte encadrée"><span class="ic">▤</span>Zone de texte</button>
+      </div><span class="gl">Commentaires</span></div>
+      <div class="group"><div class="tools">
+        <button class="big" data-mode="ink" title="Dessinez à main levée"><span class="ic">✏</span>Crayon</button>
+        <button class="big" data-mode="rect" title="Tracez un rectangle"><span class="ic">□</span>Rectangle</button>
+        <button class="big" data-mode="ellipse" title="Tracez une ellipse"><span class="ic">○</span>Ellipse</button>
+        <button class="big" data-mode="arrow" title="Tracez une flèche"><span class="ic">↗</span>Flèche</button>
+        <span class="stack"><input id="draw-color" type="color" value="#d32f2f" title="Couleur des dessins, notes et tampons">
+        <select id="draw-width" title="Épaisseur du trait"><option value="1">Fin</option><option value="2" selected>Moyen</option><option value="4">Épais</option></select></span>
+      </div><span class="gl">Dessin</span></div>
+      <div class="group"><div class="tools">
+        <button class="big" data-mode="stamp" title="Cliquez pour poser le tampon choisi"><span class="ic">⎔</span>Tampon</button>
+        <select id="stamp"></select>
+      </div><span class="gl">Tampons</span></div>
+      <div class="group"><div class="tools">
+        <button class="big" id="toggle-list" title="Afficher la liste des commentaires"><span class="ic">☰</span>Liste</button>
+      </div><span class="gl">Commentaires</span></div>
+    </section>
+    <section data-panel="signer" hidden>
+      <div class="group"><div class="tools">
+        <button class="big" data-mode="sign" title="Cliquez sur la page pour poser votre signature"><span class="ic">✍</span>Signer</button>
+        <button class="big" id="edit-sign"><span class="ic">⚙</span>Ma signature</button>
+      </div><span class="gl">Signature</span></div>
+      <div class="group"><div class="tools">
+        <button class="big" data-mode="initials" title="Cliquez sur la page pour poser votre paraphe"><span class="ic">AB</span>Parapher</button>
+        <button class="big" id="initials-all" title="Paraphe en bas à droite de chaque page"><span class="ic">⧉</span>Toutes les pages</button>
+        <button class="big" id="edit-initials"><span class="ic">⚙</span>Mon paraphe</button>
+      </div><span class="gl">Paraphe</span></div>
+      <div class="group"><div class="tools">
+        <button class="big" data-mode="date" title="Cliquez pour écrire la date du jour"><span class="ic">📅</span>Date du jour</button>
+      </div><span class="gl">Date</span></div>
+      <div class="group"><div class="tools">
+        <p class="legal">Signature image : utile pour un document courant, mais sans valeur de signature électronique certifiée.
+        <button id="legal-more" class="link">En savoir plus</button></p>
+      </div><span class="gl">Valeur juridique</span></div>
+    </section>
     <section data-panel="modifier" hidden>
       <div class="group"><div class="tools">
         <button class="big" data-mode="text" title="Cliquez sur la page à l'endroit où écrire"><span class="ic">✎</span>Écrire</button>
@@ -155,12 +237,42 @@
   <button data-sample="facture">Essayer avec une facture d'exemple</button>
   <button data-sample="facture-scannee">… ou une facture scannée</button>
 </div>
-<div id="pages"></div>
+<main>
+  <div id="pages"></div>
+  <aside id="list" hidden>
+    <div class="list-head"><strong>Commentaires</strong><button id="close-list" title="Fermer">✖</button></div>
+    <div id="list-items"></div>
+  </aside>
+</main>
 <dialog id="write">
   <form method="dialog">
     <label for="write-text">Texte à écrire :</label>
     <textarea id="write-text"></textarea>
     <div class="actions"><button value="cancel">Annuler</button><button value="ok" class="primary">Écrire</button></div>
+  </form>
+</dialog>
+<dialog id="sign-dlg">
+  <form method="dialog">
+    <h3 id="sign-title">Ma signature</h3>
+    <div class="seg"><button type="button" data-sig="draw" class="on">Dessiner</button><button type="button" data-sig="type">Taper</button><button type="button" data-sig="image">Image</button></div>
+    <div data-sigpane="draw"><canvas id="sig-canvas" width="900" height="300"></canvas>
+      <div class="hint">Signez avec la souris ou le doigt. <button type="button" id="sig-clear" class="link">Effacer</button></div></div>
+    <div data-sigpane="type" hidden><input id="sig-text" type="text" placeholder="Votre nom">
+      <select id="sig-font"><option value="cursive">Manuscrite</option><option value="'Segoe Script','Brush Script MT',cursive">Script</option><option value="Georgia,serif">Classique</option></select>
+      <canvas id="sig-preview" width="900" height="300"></canvas></div>
+    <div data-sigpane="image" hidden><label class="btn">Choisir une image (scan de votre signature)<input id="sig-file" type="file" accept="image/png,image/jpeg" hidden></label>
+      <canvas id="sig-image" width="900" height="300"></canvas></div>
+    <label class="check"><input id="sig-remember" type="checkbox" checked> Mémoriser sur cet appareil</label>
+    <div class="actions"><button value="cancel">Annuler</button><button value="ok" class="primary">Valider</button></div>
+  </form>
+</dialog>
+<dialog id="legal-dlg">
+  <form method="dialog">
+    <h3>Valeur juridique d'une signature</h3>
+    <p>Une signature dessinée, tapée ou scannée posée sur un PDF est une <strong>image</strong>. Elle convient pour un bon de commande, un document interne ou un accord simple.</p>
+    <p>Elle ne vaut pas signature électronique au sens du règlement européen eIDAS : en cas de litige, c'est à celui qui l'invoque de prouver qui a signé (Cour de cassation, chambre commerciale, 13 mars 2024).</p>
+    <p>Pour un contrat engageant, utilisez une <strong>signature électronique qualifiée</strong>, délivrée par un prestataire de confiance (liste publiée par l'ANSSI) : seule celle-ci est présumée fiable comme une signature manuscrite (Code civil, art. 1367, décret 2017-1416).</p>
+    <div class="actions"><button value="ok" class="primary">J'ai compris</button></div>
   </form>
 </dialog>
 <footer>

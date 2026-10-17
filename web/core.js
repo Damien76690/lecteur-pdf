@@ -1,6 +1,7 @@
 // Traitements PDF de la version en ligne, exécutés entièrement dans le navigateur :
 // le fichier ne quitte jamais l'ordinateur de l'utilisateur.
-//   MuPDF (AGPL)  : affichage, lecture du texte, effacement réel (« redaction »).
+//   MuPDF (AGPL)  : affichage, lecture du texte, effacement réel (« redaction »),
+//                   commentaires (surlignage, notes, dessins, tampons) et signatures.
 //   pdf-lib (MIT) : écriture de texte, couche de texte OCR, rotation et suppression de pages.
 // Toutes les fonctions prennent les octets du PDF et renvoient de nouveaux octets,
 // ce qui permet d'annuler en gardant simplement les versions précédentes.
@@ -222,6 +223,128 @@ export async function addOcrLayer(bytes, pages) {
     }
   })).bytes;
 }
+
+// ------------------------------------------------------------ commentaires et signatures
+
+// Annotations PDF standard (MuPDF) : elles s'affichent dans tous les lecteurs PDF,
+// restent modifiables et n'altèrent pas le contenu de la page.
+const COMMENT_TYPES = ["Highlight", "Underline", "StrikeOut", "Text", "FreeText", "Ink", "Square", "Circle", "Line", "Stamp"];
+export const STAMPS = ["APPROUVÉ", "PAYÉ", "REÇU", "BROUILLON", "CONFIDENTIEL", "COPIE", "REFUSÉ"];
+
+const rgb = hex => [0, 2, 4].map(i => parseInt((hex || "#000000").replace("#", "").slice(i, i + 2), 16) / 255);
+const box = ([x0, y0], [x1, y1]) => [Math.min(x0, x1), Math.min(y0, y1), Math.max(x0, x1), Math.max(y0, y1)];
+
+// Ajoute une annotation sur la page `index` ; coordonnées en points, telles qu'affichées.
+// spec.kind : highlight | underline | strike (texte entre spec.from et spec.to),
+//   note (spec.at, spec.text), textbox (spec.rect, spec.text, spec.size), ink (spec.strokes),
+//   rect | ellipse (spec.rect), arrow (spec.from, spec.to), stamp (spec.at, spec.text),
+//   image (spec.rect, spec.png : signature ou paraphe), date (spec.at, spec.text, spec.size).
+export function annotate(bytes, index, spec) {
+  return withMu(bytes, doc => {
+    const page = doc.loadPage(index);
+    try {
+      const color = rgb(spec.color), width = spec.width ?? 2;
+      let a;
+      const make = type => { a = page.createAnnotation(type); a.setCreationDate(new Date()); return a; };
+      switch (spec.kind) {
+        case "highlight": case "underline": case "strike": {
+          const st = page.toStructuredText();
+          const quads = st.highlight(spec.from, spec.to, 1000);
+          const words = st.copy(spec.from, spec.to).replace(/\s+/g, " ").trim();
+          st.destroy();
+          if (!quads.length) throw new Error("aucun texte sélectionné à cet endroit. Si le PDF est un scan, lancez d'abord la reconnaissance du texte (OCR)");
+          make({ highlight: "Highlight", underline: "Underline", strike: "StrikeOut" }[spec.kind]);
+          a.setColor(color); a.setQuadPoints(quads); a.setContents(words);
+          break;
+        }
+        case "note": {
+          const [x, y] = spec.at;
+          make("Text"); a.setRect([x, y, x + 20, y + 20]); a.setIcon("Comment");
+          a.setColor(spec.color ? color : [1, 0.84, 0]); a.setContents(spec.text);
+          break;
+        }
+        case "textbox": case "date": {
+          const size = spec.size || 12;
+          const lines = spec.text.split("\n");
+          const w = Math.max(...lines.map(l => l.length)) * size * 0.55 + 8;
+          const [x, y] = spec.rect ? spec.rect : spec.at;
+          make("FreeText"); a.setRect(spec.rect ? box(spec.rect.slice(0, 2), spec.rect.slice(2)) : [x, y, x + w, y + lines.length * size * 1.25 + 6]);
+          a.setDefaultAppearance("Helv", size, color); a.setContents(spec.text);
+          a.setBorderWidth(spec.kind === "date" ? 0 : 1);
+          if (spec.kind === "date") a.setSubject("Date");
+          break;
+        }
+        case "stamp": {
+          const size = 18, w = spec.text.length * size * 0.72 + 20, h = size * 1.45;
+          const [x, y] = spec.at;
+          make("FreeText"); a.setRect([x - w / 2, y - h / 2, x + w / 2, y + h / 2]);
+          a.setDefaultAppearance("Helv", size, color); a.setContents(spec.text); a.setQuadding(1);
+          a.setBorderWidth(2.5); a.setSubject("Tampon");
+          break;
+        }
+        case "ink": {
+          make("Ink"); a.setColor(color); a.setBorderWidth(width);
+          a.setInkList(spec.strokes.filter(s => s.length > 1));
+          break;
+        }
+        case "rect": case "ellipse": {
+          make(spec.kind === "rect" ? "Square" : "Circle"); a.setColor(color); a.setBorderWidth(width);
+          a.setRect(box(spec.rect.slice(0, 2), spec.rect.slice(2)));
+          break;
+        }
+        case "arrow": {
+          make("Line"); a.setColor(color); a.setBorderWidth(width);
+          a.setLine(spec.from, spec.to); a.setLineEndingStyles("None", "OpenArrow");
+          break;
+        }
+        case "image": {
+          make("Stamp"); a.setRect(spec.rect); a.setStampImage(new mupdf.Image(spec.png));
+          a.setContents(spec.text || "Signature"); a.setSubject(spec.text || "Signature");
+          break;
+        }
+        default: throw new Error("type d'annotation inconnu : " + spec.kind);
+      }
+      a.update();
+      return saveMu(doc);
+    } finally { page.destroy(); }
+  });
+}
+
+// Liste des commentaires : [{ page, index, type, text, bounds: [x0, y0, x1, y1] }]
+// (`index` = rang parmi les annotations de la page, pour modifier ou supprimer).
+export function listAnnotations(bytes) {
+  return withMu(bytes, doc => {
+    const out = [];
+    for (let i = 0; i < doc.countPages(); i++) {
+      const page = doc.loadPage(i);
+      page.getAnnotations().forEach((a, k) => {
+        const type = a.getType();
+        if (COMMENT_TYPES.includes(type))
+          out.push({ page: i, index: k, type, text: a.getContents() || "", subject: a.hasSubject() ? a.getSubject() : "",
+                     bounds: a.getBounds() });
+      });
+      page.destroy();
+    }
+    return out;
+  });
+}
+
+function withAnnotation(bytes, pageIndex, index, fn) {
+  return withMu(bytes, doc => {
+    const page = doc.loadPage(pageIndex);
+    try {
+      const a = page.getAnnotations()[index];
+      if (!a) throw new Error("commentaire introuvable");
+      fn(page, a);
+      return saveMu(doc);
+    } finally { page.destroy(); }
+  });
+}
+
+export const deleteAnnotation = (bytes, page, index) => withAnnotation(bytes, page, index, (p, a) => p.deleteAnnotation(a));
+
+export const setAnnotationText = (bytes, page, index, text) =>
+  withAnnotation(bytes, page, index, (p, a) => { a.setContents(text); a.update(); });
 
 // ------------------------------------------------------------ lecture du texte
 

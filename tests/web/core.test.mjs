@@ -62,3 +62,50 @@ test("un scan est détecté comme ayant besoin de l'OCR", () => {
   assert.ok(core.needsOcr(core.pageInfo(scan)));
   assert.ok(!core.needsOcr(core.pageInfo(facture())));
 });
+
+test("surligner, souligner, barrer : seul le texte sélectionné est marqué", () => {
+  let bytes = core.annotate(facture(), 0, { kind: "highlight", from: [72, 105], to: [300, 112], color: "#ffd400" });
+  bytes = core.annotate(bytes, 0, { kind: "underline", from: [72, 255], to: [200, 262], color: "#0000ff" });
+  bytes = core.annotate(bytes, 0, { kind: "strike", from: [77, 175], to: [140, 180], color: "#ff0000" });
+  const list = core.listAnnotations(bytes);
+  assert.deepEqual(list.map(a => a.type), ["Highlight", "Underline", "StrikeOut"]);
+  assert.match(list[0].text, /Société Dupont/);
+  assert.match(text(bytes), /Société Dupont/, "le texte reste intact");
+  assert.throws(() => core.annotate(facture(), 0, { kind: "highlight", from: [300, 600], to: [400, 650] }), /aucun texte/);
+});
+
+test("notes, zone de texte, dessins et tampon, puis modification et suppression", () => {
+  let bytes = facture();
+  const specs = [
+    { kind: "note", at: [400, 300], text: "À vérifier" },
+    { kind: "textbox", at: [72, 320], text: "Livré le 3 mars – 105 €", size: 12, color: "#c00000" },
+    { kind: "ink", strokes: [[[100, 400], [150, 430], [200, 400]]], color: "#0000ff" },
+    { kind: "rect", rect: [300, 450, 400, 500], color: "#008000" },
+    { kind: "ellipse", rect: [420, 450, 520, 500], color: "#008000" },
+    { kind: "arrow", from: [100, 500], to: [250, 520], color: "#ff0000" },
+    { kind: "stamp", at: [450, 650], text: "PAYÉ", color: "#c00000" },
+  ];
+  for (const s of specs) bytes = core.annotate(bytes, 0, s);
+  let list = core.listAnnotations(bytes);
+  assert.deepEqual(list.map(a => a.type), ["Text", "FreeText", "Ink", "Square", "Circle", "Line", "FreeText"]);
+  assert.equal(list[0].text, "À vérifier");
+  assert.equal(list[6].text, "PAYÉ");
+  bytes = core.setAnnotationText(bytes, 0, list[0].index, "Vérifié");
+  bytes = core.deleteAnnotation(bytes, 0, list[3].index);
+  list = core.listAnnotations(bytes);
+  assert.equal(list.length, 6);
+  assert.equal(list[0].text, "Vérifié");
+  assert.ok(!list.some(a => a.type === "Square"));
+  // Les commentaires survivent aux autres modifications (pdf-lib) et à la conversion.
+  return core.rotatePage(bytes, 0).then(b => assert.equal(core.listAnnotations(b).length, 6));
+});
+
+test("signature image posée sur la page", () => {
+  const png = mupdf.Document.openDocument(facture(), "application/pdf").loadPage(0)
+    .toPixmap(mupdf.Matrix.scale(0.2, 0.2), mupdf.ColorSpace.DeviceRGB, true).asPNG();
+  const bytes = core.annotate(facture(), 0, { kind: "image", rect: [350, 700, 500, 760], png, text: "Signature" });
+  const [sig] = core.listAnnotations(bytes);
+  assert.equal(sig.type, "Stamp");
+  assert.equal(sig.text, "Signature");
+  assert.ok(sig.bounds[0] >= 349 && sig.bounds[2] <= 501);
+});
