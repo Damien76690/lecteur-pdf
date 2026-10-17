@@ -37,10 +37,15 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-bureau.txt pyinstaller
 
+      - name: Vérifier le site servi par bureau.py (avant compilation)
+        timeout-minutes: 3
+        run: python bureau.py --verifier
+
       - name: Compiler LecteurPDF.exe
         run: pyinstaller --noconfirm --distpath dist --workpath build\pyinstaller windows\lecteur-pdf.spec
 
       - name: Vérifier l'application compilée (site complet, ouverture d'un PDF)
+        timeout-minutes: 10
         shell: pwsh
         run: |
           $p = Start-Process "dist\LecteurPDF\LecteurPDF.exe" -ArgumentList "--verifier" -Wait -PassThru

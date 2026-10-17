@@ -83,16 +83,29 @@ def verifier():
         "exemples/facture.pdf": "application/pdf",
     }
     for chemin, type_attendu in attendus.items():
-        with urllib.request.urlopen(url + chemin) as r:
+        print("Vérification :", chemin or "index.html", flush=True)
+        with urllib.request.urlopen(url + chemin, timeout=20) as r:
             assert r.status == 200 and r.headers["Content-Type"].startswith(type_attendu), chemin
             assert len(r.read()) > 0, chemin
     print("Tout fonctionne.")
+
+
+def garde_fou(secondes):
+    """Arrête le programme s'il reste bloqué (essais automatiques uniquement)."""
+    def arret():
+        print(f"Bloqué depuis {secondes} s : arrêt.", flush=True)
+        os._exit(3)
+    t = threading.Timer(secondes, arret)
+    t.daemon = True
+    t.start()
 
 
 def main():
     if sys.stdout is None:  # application sans console : messages dans journal.txt
         os.makedirs(os.path.dirname(JOURNAL), exist_ok=True)
         sys.stdout = sys.stderr = open(JOURNAL, "w", encoding="utf-8", buffering=1)
+    if "--verifier" in sys.argv or "--essai-fenetre" in sys.argv:
+        garde_fou(240)
     if "--verifier" in sys.argv:
         try:
             verifier()
@@ -117,11 +130,13 @@ def main():
                 except Exception as e:
                     print("Attente de la fenêtre :", repr(e))
                 threading.Event().wait(1)
-            print("Délai dépassé :", expression, "| message affiché :",
+            print("Délai dépassé :", expression, flush=True)
+            print("Message affiché :", 
                   window.evaluate_js("document.querySelector('#msg') && document.querySelector('#msg').textContent"))
             return False
 
         def essai(window):
+            print("Fenêtre ouverte, attente du lecteur…", flush=True)
             # Le lecteur (MuPDF) doit se charger sans Internet, puis ouvrir la facture d'exemple.
             if attendre(window, "!!(window.pywebview && window.pywebview.api && window.pywebview.api.enregistrer)"
                                 " && /Ouvrez un PDF/.test(document.querySelector('#msg').textContent)"):
