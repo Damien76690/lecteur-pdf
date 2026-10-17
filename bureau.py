@@ -2,6 +2,7 @@
 
 Lancement :  python bureau.py        (nécessite  pip install pywebview)
 Vérification sans fenêtre :  python bureau.py --verifier
+Essai de la fenêtre (s'ouvre puis se ferme seule) :  python bureau.py --essai-fenetre
 C'est ce fichier que l'application Windows (LecteurPDF.exe) exécute.
 """
 import os
@@ -30,13 +31,13 @@ class Api:
     """Fonctions appelées depuis la page (window.pywebview.api...)."""
 
     def __init__(self):
-        self.window = None
+        self._window = None
 
     def enregistrer(self, doc_id, fmt):
         import webview
         with serveur.app.test_request_context():
             path, name = serveur.export(doc_id, fmt)
-        choix = self.window.create_file_dialog(
+        choix = self._window.create_file_dialog(
             webview.FileDialog.SAVE, save_filename=name, file_types=(FILTRES[fmt],))
         if not choix:
             return {"message": "Enregistrement annulé."}
@@ -85,9 +86,29 @@ def main():
     threading.Thread(target=lambda: serveur.app.run(host="127.0.0.1", port=port),
                      daemon=True).start()
     api = Api()
-    api.window = webview.create_window("Lecteur PDF libre", f"http://127.0.0.1:{port}",
+    api._window = webview.create_window("Lecteur PDF libre", f"http://127.0.0.1:{port}",
                                        js_api=api, width=1280, height=860, min_size=(800, 500))
-    webview.start(gui="edgechromium" if sys.platform == "win32" else None)
+    essai = None
+    if "--essai-fenetre" in sys.argv:
+        resultat = {}
+
+        def essai(window):
+            # Attend que la page et le pont JavaScript soient prêts, puis ferme.
+            for _ in range(60):
+                try:
+                    if window.evaluate_js("!!(window.pywebview && window.pywebview.api && window.pywebview.api.enregistrer"
+                                          " && document.querySelector('#file'))"):
+                        resultat["ok"] = True
+                        break
+                except Exception as e:
+                    print("Attente de la fenêtre :", repr(e))
+                threading.Event().wait(1)
+            window.destroy()
+
+    webview.start(essai, api._window, gui="edgechromium" if sys.platform == "win32" else None)
+    if essai:
+        print("Fenêtre OK" if resultat.get("ok") else "Fenêtre : la page ne s'est pas chargée")
+        sys.exit(0 if resultat.get("ok") else 1)
 
 
 if __name__ == "__main__":

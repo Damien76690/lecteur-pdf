@@ -53,6 +53,9 @@ jobs:
           $p = Start-Process "dist\LecteurPDF\LecteurPDF.exe" -ArgumentList "--verifier" -Wait -PassThru
           Get-Content "$env:LOCALAPPDATA\LecteurPDF\journal.txt" -ErrorAction SilentlyContinue | Select-Object -Last 30
           if ($p.ExitCode -ne 0) { throw "La vérification a échoué (code $($p.ExitCode))" }
+          $p = Start-Process "dist\LecteurPDF\LecteurPDF.exe" -ArgumentList "--essai-fenetre" -Wait -PassThru
+          Get-Content "$env:LOCALAPPDATA\LecteurPDF\journal.txt" -ErrorAction SilentlyContinue | Select-Object -Last 30
+          if ($p.ExitCode -ne 0) { throw "La fenêtre ne s'est pas ouverte (code $($p.ExitCode))" }
 
       - name: Fabriquer l'installateur
         shell: pwsh
