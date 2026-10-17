@@ -14,10 +14,11 @@ from flask import Flask, abort, jsonify, render_template, request, send_file
 import pdftools
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-WORK = os.path.join(HERE, "travail")
+# L'application Windows range les fichiers de travail dans le profil de l'utilisateur.
+WORK = os.environ.get("LECTEUR_PDF_TRAVAIL") or os.path.join(HERE, "travail")
 os.makedirs(WORK, exist_ok=True)
 
-app = Flask(__name__)
+app = Flask(__name__, template_folder=os.path.join(HERE, "templates"))
 app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024
 
 
@@ -150,25 +151,30 @@ def ocr(doc_id):
     return jsonify({**_info(doc_id), "message": "Texte reconnu : le PDF est maintenant sélectionnable et convertible."})
 
 
-@app.get("/api/<doc_id>/download/<fmt>")
-def download(doc_id, fmt):
+def export(doc_id, fmt):
+    """Prépare le fichier à enregistrer. Renvoie (chemin, nom proposé)."""
     src, name = _current(doc_id), _name(doc_id)
     d = _dir(doc_id)
     if fmt == "pdf":
-        return send_file(src, as_attachment=True, download_name=f"{name}-modifie.pdf")
+        return src, f"{name}-modifie.pdf"
     if fmt == "docx":
-        out = pdftools.to_word(src, os.path.join(d, "export.docx"))
-        return send_file(out, as_attachment=True, download_name=f"{name}.docx")
+        return pdftools.to_word(src, os.path.join(d, "export.docx")), f"{name}.docx"
     if fmt == "xlsx":
         out = os.path.join(d, "export.xlsx")
         pdftools.to_excel(src, out)
-        return send_file(out, as_attachment=True, download_name=f"{name}.xlsx")
+        return out, f"{name}.xlsx"
     if fmt == "txt":
         out = os.path.join(d, "export.txt")
         with open(out, "w", encoding="utf-8") as f:
             f.write(pdftools.extract_text(src))
-        return send_file(out, as_attachment=True, download_name=f"{name}.txt")
+        return out, f"{name}.txt"
     abort(404)
+
+
+@app.get("/api/<doc_id>/download/<fmt>")
+def download(doc_id, fmt):
+    path, name = export(doc_id, fmt)
+    return send_file(path, as_attachment=True, download_name=name)
 
 
 if __name__ == "__main__":

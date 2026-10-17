@@ -110,6 +110,12 @@ def needs_ocr(doc):
 
 def find_tesseract():
     """Chemin de Tesseract (logiciel libre de reconnaissance de texte)."""
+    # L'application Windows embarque Tesseract dans son dossier « tesseract ».
+    bundle = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    embedded = os.path.join(bundle, "tesseract", "tesseract.exe")
+    if os.path.exists(embedded):
+        os.environ.setdefault("TESSDATA_PREFIX", os.path.join(bundle, "tesseract", "tessdata"))
+        return embedded
     found = shutil.which("tesseract")
     if found:
         return found
@@ -141,8 +147,12 @@ def ocr_pdf(src_path, dst_path, language="fra+eng", dpi=300):
             pix.save(png)
             base = os.path.join(tmp, f"p{page.number}")
             subprocess.run([tesseract, png, base, "-l", language, "pdf"], check=True,
-                           capture_output=True)
-            with pymupdf.open(base + ".pdf") as ocr_page:
+                           capture_output=True,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            # Lu en mémoire : sous Windows, un fichier encore ouvert ne peut pas être supprimé.
+            with open(base + ".pdf", "rb") as fh:
+                data = fh.read()
+            with pymupdf.open("pdf", data) as ocr_page:
                 new = out.new_page(width=page.rect.width, height=page.rect.height)
                 new.show_pdf_page(new.rect, ocr_page, 0)
     out.save(dst_path, garbage=3, deflate=True)

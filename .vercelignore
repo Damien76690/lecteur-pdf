@@ -5,3 +5,6 @@ templates
 travail
 *.bat
 *.sh
+windows
+bureau.py
+requirements-bureau.txt
