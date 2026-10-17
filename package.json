@@ -1,0 +1,21 @@
+{
+  "name": "lecteur-pdf-web",
+  "private": true,
+  "description": "Version en ligne du lecteur PDF libre (tout se passe dans le navigateur)",
+  "license": "AGPL-3.0-or-later",
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build-web.mjs",
+    "test": "node --test tests/web/core.test.mjs"
+  },
+  "dependencies": {
+    "@tesseract.js-data/eng": "1.0.0",
+    "@tesseract.js-data/fra": "1.0.0",
+    "docx": "9.5.1",
+    "mupdf": "1.28.1",
+    "pdf-lib": "1.17.1",
+    "tesseract.js": "5.1.1",
+    "tesseract.js-core": "5.1.1",
+    "xlsx": "0.18.5"
+  }
+}

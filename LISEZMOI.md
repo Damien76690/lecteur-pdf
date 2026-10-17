@@ -1,6 +1,22 @@
 # Lecteur PDF libre
 
-Petit logiciel libre qui tourne **sur votre ordinateur** (rien n'est envoyé sur Internet) et s'utilise dans le navigateur.
+Petit logiciel libre pour lire, modifier, corriger un PDF et le convertir en Word ou Excel.
+
+## Version en ligne (rien à installer)
+
+Ouvrez **https://lecteur-pdf-libre.vercel.app** dans votre navigateur (ordinateur, tablette ou téléphone).
+Le PDF est traité **dans votre navigateur** : il n'est jamais envoyé sur Internet.
+
+Elle propose les mêmes fonctions que la version à installer ci-dessous, y compris l'OCR (aucun logiciel à ajouter).
+La première reconnaissance de texte télécharge environ 4 Mo de données de langue.
+
+Pour les développeurs : le code est dans `web/` (`core.js` = traitements, `app.js` = interface).
+`npm ci && npm test` lance les tests, `npm run build` prépare le site dans `dist/`.
+Chaque modification fusionnée dans `main` est publiée automatiquement.
+
+## Version à installer (Python)
+
+Elle tourne **sur votre ordinateur** et s'utilise aussi dans le navigateur.
 
 | Fonction | Comment |
 |---|---|
@@ -46,4 +62,6 @@ python pdftools.py remplacer document.pdf "ancien" "nouveau"
 
 ## Briques libres utilisées
 
-PyMuPDF (AGPL), pdfplumber (MIT), pdf2docx (AGPL), openpyxl (MIT), Flask (BSD), Tesseract (Apache 2.0). Le projet doit donc être diffusé sous licence **AGPL-3.0** s'il est publié.
+Version en ligne : MuPDF (AGPL), pdf-lib (MIT), Tesseract.js (Apache 2.0), SheetJS (Apache 2.0), docx (MIT).
+
+Version à installer : PyMuPDF (AGPL), pdfplumber (MIT), pdf2docx (AGPL), openpyxl (MIT), Flask (BSD), Tesseract (Apache 2.0). Le projet doit donc être diffusé sous licence **AGPL-3.0** s'il est publié.
