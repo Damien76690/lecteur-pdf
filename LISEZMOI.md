@@ -7,26 +7,26 @@ Petit logiciel libre pour lire, modifier, corriger un PDF et le convertir en Wor
 Ouvrez **https://lecteur-pdf-libre.vercel.app** dans votre navigateur (ordinateur, tablette ou téléphone).
 Le PDF est traité **dans votre navigateur** : il n'est jamais envoyé sur Internet.
 
-Elle propose les mêmes fonctions que la version à installer ci-dessous, y compris l'OCR (aucun logiciel à ajouter).
+Elle propose les mêmes fonctions que l'application Windows ci-dessous, y compris l'OCR (aucun logiciel à ajouter).
 La première reconnaissance de texte télécharge environ 4 Mo de données de langue.
 
-Pour les développeurs : le code est dans `web/` (`core.js` = traitements, `app.js` = interface).
-`npm ci && npm test` lance les tests, `npm run build` prépare le site dans `dist/`.
 Le site est hébergé sur Vercel (projet `lecteur-pdf-libre`) ; les tests sont relancés avant chaque publication et la bloquent s'ils échouent.
 
-## Version à installer (Python)
+## Les menus
 
-Elle tourne **sur votre ordinateur** et s'utilise aussi dans le navigateur.
+Les commandes sont rangées dans des onglets, comme dans Word : **Fichier**, **Accueil**, **Modifier**, **Pages** et **Convertir**.
 
-| Fonction | Comment |
+| Fonction | Où |
 |---|---|
-| Écrire sur un PDF | Bouton **Écrire**, puis cliquez à l'endroit voulu (taille et couleur réglables) |
-| Corriger un texte | Champs **Rechercher / Remplacer par**, puis **Remplacer** (toutes les occurrences) |
-| Effacer une zone | **Effacer une zone**, puis tracez un rectangle (le contenu est réellement supprimé) |
-| Pivoter / supprimer une page | Boutons ⟳ et 🗑 en haut à droite de chaque page |
-| Annuler | **↶ Annuler** (autant de fois que nécessaire) |
-| PDF scanné → texte | **Reconnaître le texte (OCR)** : le PDF devient sélectionnable, modifiable et convertible |
-| Convertir | **Enregistrer : PDF / Word / Excel / Texte** |
+| Ouvrir, enregistrer, fermer | **Fichier** ou **Accueil** (Ctrl+O, Ctrl+S) |
+| Annuler, rétablir | **Accueil** (Ctrl+Z, Ctrl+Y) |
+| Zoom, largeur de page, page entière, aller à une page | **Accueil** |
+| Écrire sur la page (taille et couleur réglables) | **Modifier › Écrire**, puis cliquez à l'endroit voulu |
+| Corriger un texte | **Modifier** : Rechercher / Remplacer par, puis **Remplacer** (toutes les occurrences) |
+| Effacer une zone | **Modifier › Effacer une zone**, puis tracez un rectangle (le contenu est réellement supprimé) |
+| PDF scanné → texte | **Modifier › Reconnaître le texte** : le PDF devient sélectionnable, modifiable et convertible |
+| Pivoter, supprimer une page | **Pages**, ou boutons ⟳ et 🗑 en haut à droite de chaque page |
+| Convertir | **Convertir** : Word, Excel, Texte ou PDF |
 
 ## Application Windows (le plus simple)
 
@@ -34,31 +34,23 @@ Elle tourne **sur votre ordinateur** et s'utilise aussi dans le navigateur.
 2. Double-cliquez dessus. Si Windows affiche « Windows a protégé votre ordinateur », cliquez sur **Informations complémentaires** puis **Exécuter quand même** (l'application n'est pas encore signée).
 3. Suivez les étapes : aucun droit administrateur n'est demandé. Lancez ensuite **Lecteur PDF libre** depuis le menu Démarrer ou l'icône du Bureau.
 
-Tout est inclus, y compris la reconnaissance de texte (OCR) en français : rien d'autre à installer. Les fichiers de travail sont rangés dans `%LOCALAPPDATA%\LecteurPDF`.
+L'application affiche exactement la version en ligne, mais tout est inclus dans l'ordinateur : elle fonctionne **sans Internet**, reconnaissance de texte (OCR) en français comprise. Les fichiers sont enregistrés où vous le choisissez.
 Une version sans installation existe aussi : [LecteurPDF-portable.zip](https://github.com/Damien76690/lecteur-pdf/releases/latest/download/LecteurPDF-portable.zip) (décompressez, puis double-cliquez sur `LecteurPDF.exe`).
 
-## Installation depuis le code source (Windows, Mac, Linux)
+## Pour les développeurs
 
-1. Installez **Python 3** : https://www.python.org/downloads/ (sous Windows, cochez « Add Python to PATH »).
-2. Pour l'OCR, installez **Tesseract** avec la langue française :
-   - Windows : installeur « UB Mannheim » https://github.com/UB-Mannheim/tesseract/wiki (cochez *French* dans « Additional language data »).
-   - Mac : `brew install tesseract tesseract-lang`
-   - Linux : `sudo apt install tesseract-ocr tesseract-ocr-fra`
+Une seule base de code pour les deux versions : `web/` (`core.js` = traitements, `app.js` = interface).
 
-## Lancement
-
-- Windows : double-cliquez sur `lancer-windows.bat`
-- Mac / Linux : `./lancer-mac-linux.sh`
-
-La première fois, les composants s'installent (une minute environ). Le navigateur s'ouvre ensuite sur http://127.0.0.1:5000. Fermez la fenêtre noire pour arrêter.
-
-Pour avoir la même fenêtre que l'application Windows sans navigateur : `pip install -r requirements-bureau.txt` puis `python bureau.py`.
+- `npm ci && npm test` lance les tests, `npm run build` prépare le site dans `dist/` (publié sur Vercel).
+- Application de bureau : `npm run build -- build/site`, puis `pip install -r requirements-bureau.txt` et `python bureau.py`.
 
 ## Fabrication de l'application Windows
 
-Elle est compilée automatiquement par GitHub (fichier `.github/workflows/windows.yml`) à chaque modification de la branche `main`, puis publiée dans **Releases**. Recette : `windows/lecteur-pdf.spec` (PyInstaller) et `windows/installateur.iss` (Inno Setup).
+Elle est compilée automatiquement par GitHub (fichier `.github/workflows/windows.yml`) à chaque modification de la branche `main`, puis publiée dans **Releases**. `bureau.py` sert le site `build/site` sur l'ordinateur (127.0.0.1 uniquement) et l'affiche dans une fenêtre. Recette : `windows/lecteur-pdf.spec` (PyInstaller) et `windows/installateur.iss` (Inno Setup).
 
-## En ligne de commande (optionnel)
+## En ligne de commande (optionnel, Python)
+
+`pip install -r requirements.txt` (et Tesseract pour l'OCR), puis :
 
 ```
 python pdftools.py word   document.pdf
@@ -73,7 +65,6 @@ python pdftools.py remplacer document.pdf "ancien" "nouveau"
 - **Remplacer** écrit le nouveau texte en Helvetica à la même taille et couleur : la police d'origine n'est pas toujours conservée.
 - **OCR** : vérifiez les chiffres importants (ex. « 3,75 » peut être lu « 9:75 » sur un scan de mauvaise qualité).
 - Pour un scan, lancez l'OCR **avant** de remplacer du texte ou de convertir en Excel/Word.
-- Les fichiers de travail sont dans le dossier `travail/` ; vous pouvez le vider quand vous voulez.
 
 ## Briques libres utilisées
 

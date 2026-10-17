@@ -9,18 +9,34 @@
 <style>
   :root { --bg:#f3f4f6; --panel:#fff; --text:#1f2937; --muted:#6b7280; --accent:#2563eb; --border:#d1d5db; }
   * { box-sizing:border-box; }
+  [hidden] { display:none !important; }
   body { margin:0; font:14px system-ui, sans-serif; background:var(--bg); color:var(--text); }
-  header { position:sticky; top:0; z-index:10; background:var(--panel); border-bottom:1px solid var(--border);
-           padding:8px 12px; display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
-  header h1 { font-size:16px; margin:0 12px 0 0; }
-  .group { display:flex; flex-wrap:wrap; gap:4px; align-items:center; padding-right:10px; border-right:1px solid var(--border); }
+  header { position:sticky; top:0; z-index:10; background:var(--panel); border-bottom:1px solid var(--border); }
+  .top { display:flex; align-items:center; gap:8px; padding:6px 12px 0; overflow-x:auto; }
+  .top h1 { font-size:15px; margin:0 8px 0 0; white-space:nowrap; }
+  .tabs { display:flex; gap:2px; }
+  .tabs button { border:none; border-radius:6px 6px 0 0; background:none; padding:7px 14px; border-bottom:3px solid transparent; }
+  .tabs button.on { color:var(--accent); border-bottom-color:var(--accent); background:var(--bg); }
+  .tabs button:disabled { opacity:1; cursor:pointer; }
+  #docname { margin-left:auto; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:40vw; }
+  .ribbon { background:var(--bg); border-top:1px solid var(--border); overflow-x:auto; }
+  .ribbon section { display:flex; gap:0; padding:6px 8px 2px; min-height:86px; }
+  .group { display:flex; flex-direction:column; align-items:center; padding:0 10px; border-right:1px solid var(--border); }
   .group:last-child { border-right:none; }
+  .tools { display:flex; gap:4px; align-items:center; flex:1; }
+  .gl { font-size:11px; color:var(--muted); padding:3px 0 2px; white-space:nowrap; }
+  .stack { display:flex; flex-direction:column; gap:4px; }
   button, label.btn { font:inherit; padding:6px 10px; border:1px solid var(--border); border-radius:6px;
            background:#fff; color:var(--text); cursor:pointer; white-space:nowrap; }
+  button.big, label.btn.big { display:flex; flex-direction:column; align-items:center; gap:2px; min-width:64px;
+           padding:4px 8px; font-size:12px; border-color:transparent; background:transparent; }
+  .ic { font-size:20px; line-height:24px; font-weight:600; }
   button:hover, label.btn:hover { border-color:var(--accent); }
   button.on, button.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
   button:disabled { opacity:.45; cursor:default; }
+  select { font:inherit; padding:5px; border:1px solid var(--border); border-radius:6px; background:#fff; }
   input[type=text] { font:inherit; padding:6px; border:1px solid var(--border); border-radius:6px; width:120px; }
+  #goto { width:56px; } #count { color:var(--muted); padding:0 4px; }
   input[type=number] { width:52px; padding:5px; border:1px solid var(--border); border-radius:6px; }
   #msg { padding:8px 12px; color:var(--muted); min-height:34px; }
   #msg.err { color:#b91c1c; }
@@ -47,40 +63,97 @@
 </head>
 <body>
 <header>
-  <h1>📄 Lecteur PDF</h1>
-  <div class="group">
-    <label class="btn">Ouvrir un PDF<input id="file" type="file" accept="application/pdf,.pdf" hidden></label>
+  <div class="top">
+    <h1>📄 Lecteur PDF</h1>
+    <nav class="tabs" role="tablist" aria-label="Menus">
+      <button role="tab" data-tab="fichier">Fichier</button>
+      <button role="tab" data-tab="accueil" class="on">Accueil</button>
+      <button role="tab" data-tab="modifier">Modifier</button>
+      <button role="tab" data-tab="pages">Pages</button>
+      <button role="tab" data-tab="convertir">Convertir</button>
+    </nav>
+    <span id="docname"></span>
   </div>
-  <div class="group">
-    <button data-mode="read" class="on">Lecture</button>
-    <button data-mode="text" title="Cliquez sur la page à l'endroit où écrire">Écrire</button>
-    <input id="size" type="number" value="12" min="4" max="96" title="Taille du texte">
-    <input id="color" type="color" value="#000000" title="Couleur du texte">
-    <button data-mode="erase" title="Tracez un rectangle pour effacer une zone">Effacer une zone</button>
-  </div>
-  <div class="group">
-    <input id="old" type="text" placeholder="Rechercher…">
-    <input id="new" type="text" placeholder="Remplacer par…">
-    <button id="replace">Remplacer</button>
-  </div>
-  <div class="group">
-    <button id="undo">↶ Annuler</button>
-    <button id="ocr" title="Reconnaître le texte d'un PDF scanné">Reconnaître le texte (OCR)</button>
-  </div>
-  <div class="group">
-    Enregistrer :
-    <button data-dl="pdf">PDF</button>
-    <button data-dl="docx">Word</button>
-    <button data-dl="xlsx">Excel</button>
-    <button data-dl="txt">Texte</button>
+  <div class="ribbon">
+    <section data-panel="fichier" hidden>
+      <div class="group"><div class="tools">
+        <label class="btn big" title="Ouvrir un PDF (Ctrl+O)"><span class="ic">📂</span>Ouvrir<input id="file" type="file" accept="application/pdf,.pdf" hidden></label>
+        <button class="big" data-dl="pdf" title="Enregistrer le PDF modifié (Ctrl+S)"><span class="ic">💾</span>Enregistrer</button>
+        <button class="big" id="close" title="Fermer le document"><span class="ic">✖</span>Fermer</button>
+      </div><span class="gl">Document</span></div>
+      <div class="group"><div class="tools">
+        <button class="big" data-sample="facture"><span class="ic">🧾</span>Facture d'exemple</button>
+        <button class="big" data-sample="facture-scannee"><span class="ic">🖨</span>Facture scannée</button>
+      </div><span class="gl">Essayer</span></div>
+    </section>
+    <section data-panel="accueil">
+      <div class="group"><div class="tools">
+        <label class="btn big"><span class="ic">📂</span>Ouvrir<input class="open" type="file" accept="application/pdf,.pdf" hidden></label>
+        <button class="big" data-dl="pdf"><span class="ic">💾</span>Enregistrer</button>
+      </div><span class="gl">Fichier</span></div>
+      <div class="group"><div class="tools">
+        <button class="big" id="undo" title="Annuler (Ctrl+Z)"><span class="ic">↶</span>Annuler</button>
+        <button class="big" id="redo" title="Rétablir (Ctrl+Y)"><span class="ic">↷</span>Rétablir</button>
+      </div><span class="gl">Historique</span></div>
+      <div class="group"><div class="tools">
+        <button class="big on" data-mode="read" title="Faire défiler et lire"><span class="ic">🖐</span>Lecture</button>
+      </div><span class="gl">Outil</span></div>
+      <div class="group"><div class="tools">
+        <button id="zoom-out" title="Zoom arrière">−</button>
+        <select id="zoom" title="Zoom">
+          <option value="0.5">50 %</option><option value="0.75">75 %</option><option value="1" selected>100 %</option>
+          <option value="1.25">125 %</option><option value="1.5">150 %</option><option value="2">200 %</option>
+          <option value="3">300 %</option><option value="width">Largeur de page</option><option value="page">Page entière</option>
+        </select>
+        <button id="zoom-in" title="Zoom avant">+</button>
+      </div><span class="gl">Affichage</span></div>
+      <div class="group"><div class="tools">
+        <button id="prev" title="Page précédente">▲</button>
+        <input id="goto" type="number" min="1" value="1" title="Aller à la page"><span id="count">/ 0</span>
+        <button id="next" title="Page suivante">▼</button>
+      </div><span class="gl">Navigation</span></div>
+    </section>
+    <section data-panel="modifier" hidden>
+      <div class="group"><div class="tools">
+        <button class="big" data-mode="text" title="Cliquez sur la page à l'endroit où écrire"><span class="ic">✎</span>Écrire</button>
+        <span class="stack"><input id="size" type="number" value="12" min="4" max="96" title="Taille du texte">
+        <input id="color" type="color" value="#000000" title="Couleur du texte"></span>
+      </div><span class="gl">Texte</span></div>
+      <div class="group"><div class="tools">
+        <button class="big" data-mode="erase" title="Tracez un rectangle pour effacer une zone"><span class="ic">▭</span>Effacer une zone</button>
+      </div><span class="gl">Effacer</span></div>
+      <div class="group"><div class="tools">
+        <span class="stack"><input id="old" type="text" placeholder="Rechercher…">
+        <input id="new" type="text" placeholder="Remplacer par…"></span>
+        <button class="big" id="replace"><span class="ic">⇄</span>Remplacer</button>
+      </div><span class="gl">Corriger</span></div>
+      <div class="group"><div class="tools">
+        <button class="big" id="ocr" title="Reconnaître le texte d'un PDF scanné"><span class="ic">🔍</span>Reconnaître le texte</button>
+      </div><span class="gl">Scan (OCR)</span></div>
+    </section>
+    <section data-panel="pages" hidden>
+      <div class="group"><div class="tools">
+        <button class="big" id="rotate-left" title="Pivoter la page affichée vers la gauche"><span class="ic">⟲</span>Pivoter à gauche</button>
+        <button class="big" id="rotate-right" title="Pivoter la page affichée vers la droite"><span class="ic">⟳</span>Pivoter à droite</button>
+        <button class="big" id="delete-page" title="Supprimer la page affichée"><span class="ic">🗑</span>Supprimer la page</button>
+      </div><span class="gl">Page affichée</span></div>
+    </section>
+    <section data-panel="convertir" hidden>
+      <div class="group"><div class="tools">
+        <button class="big" data-dl="docx"><span class="ic">W</span>Word</button>
+        <button class="big" data-dl="xlsx"><span class="ic">X</span>Excel</button>
+        <button class="big" data-dl="txt"><span class="ic">T</span>Texte</button>
+        <button class="big" data-dl="pdf"><span class="ic">📄</span>PDF</button>
+      </div><span class="gl">Enregistrer au format</span></div>
+    </section>
   </div>
 </header>
 <div id="msg">Chargement…</div>
 <div id="drop">
   Glissez un fichier PDF ici ou utilisez « Ouvrir un PDF ».<br>
   <strong>Vos fichiers restent sur votre ordinateur</strong> : rien n'est envoyé sur Internet.<br>
-  <button id="sample">Essayer avec une facture d'exemple</button>
-  <button id="sample-scan">… ou une facture scannée</button>
+  <button data-sample="facture">Essayer avec une facture d'exemple</button>
+  <button data-sample="facture-scannee">… ou une facture scannée</button>
 </div>
 <div id="pages"></div>
 <dialog id="write">

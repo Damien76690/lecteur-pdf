@@ -1,10 +1,11 @@
 // Prépare le site statique dans dist/ : les fichiers de web/ plus les bibliothèques
 // libres copiées depuis node_modules (aucune dépendance à un CDN, fonctionne hors ligne).
-// Usage : npm ci && npm run build
+// Usage : npm ci && npm run build            (site dans dist/, publié sur Vercel)
+//         npm run build -- build/site   (site embarqué dans l'application Windows)
 import { cpSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { makeExamples } from "./exemples.mjs";
 
-const out = "dist";
+const out = process.argv[2] || "dist";
 const nm = "node_modules/";
 const files = {
   "vendor/mupdf/mupdf.js": "mupdf/dist/mupdf.js",
