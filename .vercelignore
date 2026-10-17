@@ -1,0 +1,10 @@
+app.py
+pdftools.py
+requirements.txt
+templates
+travail
+*.bat
+*.sh
+windows
+bureau.py
+requirements-bureau.txt

@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lecteur PDF libre</title>
+<meta name="description" content="Lire, modifier, corriger un PDF et le convertir en Word ou Excel, directement dans le navigateur. Vos fichiers ne quittent pas votre ordinateur.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📄</text></svg>">
+<style>
+  :root { --bg:#f3f4f6; --panel:#fff; --text:#1f2937; --muted:#6b7280; --accent:#2563eb; --border:#d1d5db; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:14px system-ui, sans-serif; background:var(--bg); color:var(--text); }
+  header { position:sticky; top:0; z-index:10; background:var(--panel); border-bottom:1px solid var(--border);
+           padding:8px 12px; display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+  header h1 { font-size:16px; margin:0 12px 0 0; }
+  .group { display:flex; flex-wrap:wrap; gap:4px; align-items:center; padding-right:10px; border-right:1px solid var(--border); }
+  .group:last-child { border-right:none; }
+  button, label.btn { font:inherit; padding:6px 10px; border:1px solid var(--border); border-radius:6px;
+           background:#fff; color:var(--text); cursor:pointer; white-space:nowrap; }
+  button:hover, label.btn:hover { border-color:var(--accent); }
+  button.on, button.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+  button:disabled { opacity:.45; cursor:default; }
+  input[type=text] { font:inherit; padding:6px; border:1px solid var(--border); border-radius:6px; width:120px; }
+  input[type=number] { width:52px; padding:5px; border:1px solid var(--border); border-radius:6px; }
+  #msg { padding:8px 12px; color:var(--muted); min-height:34px; }
+  #msg.err { color:#b91c1c; }
+  #pages { display:flex; flex-direction:column; align-items:center; gap:18px; padding:8px 12px 60px; }
+  .page { position:relative; background:#fff; box-shadow:0 1px 4px rgba(0,0,0,.2); max-width:100%; touch-action:pan-y; }
+  .page img { display:block; width:100%; height:100%; user-select:none; -webkit-user-drag:none; }
+  .page .bar { position:absolute; top:-1px; right:-1px; display:flex; gap:2px; opacity:.85; }
+  .page .bar button { padding:2px 6px; font-size:12px; }
+  .page .num { position:absolute; bottom:-18px; left:0; right:0; text-align:center; color:var(--muted); font-size:12px; }
+  .sel { position:absolute; border:2px dashed #dc2626; background:rgba(220,38,38,.1); pointer-events:none; }
+  .mode-text .page img { cursor:text; } .mode-erase .page img { cursor:crosshair; }
+  .mode-erase .page { touch-action:none; }
+  #drop { margin:40px auto; max-width:560px; padding:36px; border:2px dashed var(--border); border-radius:12px;
+          text-align:center; color:var(--muted); background:var(--panel); line-height:1.6; }
+  #drop.over { border-color:var(--accent); }
+  #drop button { margin-top:8px; }
+  .busy, .busy * { cursor:progress !important; }
+  dialog { border:1px solid var(--border); border-radius:10px; padding:16px; max-width:min(420px, 92vw); }
+  dialog textarea { width:100%; min-height:90px; font:inherit; padding:6px; border:1px solid var(--border); border-radius:6px; }
+  dialog .actions { display:flex; justify-content:flex-end; gap:6px; margin-top:10px; }
+  footer { text-align:center; color:var(--muted); font-size:12px; padding:0 12px 24px; }
+  footer a { color:inherit; }
+</style>
+</head>
+<body>
+<header>
+  <h1>📄 Lecteur PDF</h1>
+  <div class="group">
+    <label class="btn">Ouvrir un PDF<input id="file" type="file" accept="application/pdf,.pdf" hidden></label>
+  </div>
+  <div class="group">
+    <button data-mode="read" class="on">Lecture</button>
+    <button data-mode="text" title="Cliquez sur la page à l'endroit où écrire">Écrire</button>
+    <input id="size" type="number" value="12" min="4" max="96" title="Taille du texte">
+    <input id="color" type="color" value="#000000" title="Couleur du texte">
+    <button data-mode="erase" title="Tracez un rectangle pour effacer une zone">Effacer une zone</button>
+  </div>
+  <div class="group">
+    <input id="old" type="text" placeholder="Rechercher…">
+    <input id="new" type="text" placeholder="Remplacer par…">
+    <button id="replace">Remplacer</button>
+  </div>
+  <div class="group">
+    <button id="undo">↶ Annuler</button>
+    <button id="ocr" title="Reconnaître le texte d'un PDF scanné">Reconnaître le texte (OCR)</button>
+  </div>
+  <div class="group">
+    Enregistrer :
+    <button data-dl="pdf">PDF</button>
+    <button data-dl="docx">Word</button>
+    <button data-dl="xlsx">Excel</button>
+    <button data-dl="txt">Texte</button>
+  </div>
+</header>
+<div id="msg">Chargement…</div>
+<div id="drop">
+  Glissez un fichier PDF ici ou utilisez « Ouvrir un PDF ».<br>
+  <strong>Vos fichiers restent sur votre ordinateur</strong> : rien n'est envoyé sur Internet.<br>
+  <button id="sample">Essayer avec une facture d'exemple</button>
+  <button id="sample-scan">… ou une facture scannée</button>
+</div>
+<div id="pages"></div>
+<dialog id="write">
+  <form method="dialog">
+    <label for="write-text">Texte à écrire :</label>
+    <textarea id="write-text"></textarea>
+    <div class="actions"><button value="cancel">Annuler</button><button value="ok" class="primary">Écrire</button></div>
+  </form>
+</dialog>
+<footer>
+  Logiciel libre (licence AGPL-3.0) · moteurs : MuPDF, pdf-lib, Tesseract, SheetJS, docx
+</footer>
+<script type="module" src="app.js"></script>
+</body>
+</html>
