@@ -1,7 +1,8 @@
 // Prépare le site statique dans dist/ : les fichiers de web/ plus les bibliothèques
 // libres copiées depuis node_modules (aucune dépendance à un CDN, fonctionne hors ligne).
 // Usage : npm ci && npm run build
-import { cpSync, mkdirSync, rmSync } from "node:fs";
+import { cpSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { makeExamples } from "./exemples.mjs";
 
 const out = "dist";
 const nm = "node_modules/";
@@ -26,4 +27,6 @@ for (const [dst, src] of Object.entries(files)) {
   mkdirSync(`${out}/${dst}`.replace(/\/[^/]+$/, ""), { recursive: true });
   cpSync(nm + src, `${out}/${dst}`);
 }
+mkdirSync(`${out}/exemples`);
+for (const [name, bytes] of Object.entries(await makeExamples())) writeFileSync(`${out}/exemples/${name}`, bytes);
 console.log(`Site prêt dans ${out}/`);
