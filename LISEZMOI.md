@@ -41,9 +41,12 @@ Les commandes sont rangées dans des onglets, comme dans Word : **Fichier**, **A
 | Ajouter une page blanche, insérer un autre PDF, fusionner | **Pages › Page blanche / Insérer un PDF / Fusionner** (insérer : après la page affichée ; fusionner : à la fin) |
 | Extraire des pages dans un nouveau PDF | **Pages › Extraire des pages**, puis par exemple `1-3, 5` : le résultat s'ouvre dans un nouvel onglet |
 | Numéroter les pages, poser un filigrane | **Pages › Numéroter** (position, « Page 1 / 10 »…, première page numérotée) et **Pages › Filigrane** (CONFIDENTIEL, COPIE…) |
+| Remplir un formulaire PDF | Cliquez dans un champ (zones bleutées) et tapez, Tab pour passer au suivant ; cases à cocher, boutons radio et listes se règlent d'un clic |
+| Ouvrir un PDF protégé par mot de passe | Mim PDF demande le mot de passe ; la copie enregistrée garde la même protection |
+| Protéger un PDF | **Fichier › Protéger** : mot de passe à l'ouverture (chiffrement AES 256 bits) et/ou interdire l'impression, la copie ou les modifications |
 | Convertir | **Convertir** : Word, Excel, Texte ou PDF |
 
-**PDF signés électroniquement (Docusign, certificat…)** : un bandeau le signale à l'ouverture. Les commentaires, surlignages, tampons et signatures image sont ajoutés à la suite du fichier, sans toucher aux octets signés : la signature d'origine reste valable. Les autres modifications (rotation, suppression de page, texte écrit, OCR…) l'invalident dans la copie : Mim PDF prévient avant d'enregistrer.
+**PDF signés électroniquement (Docusign, certificat…)** : un bandeau le signale à l'ouverture. Les commentaires, surlignages, tampons, signatures image et champs de formulaire remplis sont ajoutés à la suite du fichier, sans toucher aux octets signés : la signature d'origine reste valable. Les autres modifications (rotation, suppression de page, texte écrit, OCR…) l'invalident dans la copie : Mim PDF prévient avant d'enregistrer.
 
 ## Application Windows (le plus simple)
 

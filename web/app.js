@@ -57,6 +57,7 @@ function setBytes(bytes) {
   doc.pages = core.pageInfo(bytes);
   doc.annots = core.listAnnotations(bytes);
   doc.outline = core.outline(doc.mu);
+  doc.fieldList = core.fields(doc.mu);
   doc.version++;
   found = null; $("#find-count").textContent = "";
   render();
@@ -80,20 +81,43 @@ function showInfo() {
   if (doc.signed) parts.push(core.keepsOriginal(doc.original, doc.bytes)
     ? "🔏 Ce document est signé électroniquement. Vos commentaires, surlignages et signatures sont ajoutés sans toucher à la signature d'origine."
     : "⚠ Ce document était signé électroniquement : vos modifications rendent cette signature invalide dans la copie enregistrée (le fichier d'origine n'est pas touché).");
-  if (doc.fields) parts.push(`Ce document contient ${plural(doc.fields, "champ")} de formulaire.`);
+  if (doc.fields) parts.push(`Ce document contient ${plural(doc.fields, "champ")} de formulaire : cliquez dedans pour les remplir.`);
+  if (doc.protection) parts.push("🔒 Le PDF enregistré sera protégé par " + (doc.protection.password ? "mot de passe." : "des restrictions (impression, copie ou modification).") +
+    " Fichier › Protéger pour changer.");
   $("#info").textContent = parts.join(" ");
   $("#info").hidden = !parts.length;
 }
 
+// Demande le mot de passe d'un PDF protégé ; renvoie les octets déverrouillés, ou null si l'utilisateur abandonne.
+async function askPassword(bytes, name) {
+  const dlg = $("#pw-dlg"), input = $("#pw-input");
+  let hint = `« ${name}.pdf » est protégé par un mot de passe.`;
+  for (;;) {
+    $("#pw-hint").textContent = hint; input.value = "";
+    const ok = await new Promise(done => { dlg.onclose = () => done(dlg.returnValue === "ok"); dlg.returnValue = ""; dlg.showModal(); input.focus(); });
+    if (!ok) return null;
+    try { return { bytes: core.unlock(bytes, input.value), password: input.value }; }
+    catch { hint = "Mot de passe incorrect, réessayez."; }
+  }
+}
+
 async function openBytes(bytes, name) {
   if (!ready) return say("Patientez, le lecteur se charge…");
+  let protection = null;
+  try {
+    if (core.needsPassword(bytes)) {
+      const r = await askPassword(bytes, name);
+      if (!r) return say("Ouverture annulée.");
+      bytes = r.bytes; protection = { password: r.password };
+    }
+  } catch { return say(`Erreur : ${name}.pdf n'est pas un PDF lisible.`, true); }
   // Déjà ouvert (même nom, même contenu) : on affiche simplement son onglet.
   const same = docs.find(d => d.name === name && d.original.length === bytes.length && core.keepsOriginal(d.original, bytes));
   if (same) { activate(same); return say(`${name}.pdf est déjà ouvert.`); }
   await busy("Ouverture…", async () => {
     try { core.pageInfo(bytes); } catch { throw new Error("ce fichier n'est pas un PDF lisible"); }
     remember();
-    doc = { name, history: [], future: [], version: 0, original: bytes, signed: core.isSigned(bytes), scroll: 0 };
+    doc = { name, history: [], future: [], version: 0, original: bytes, signed: core.isSigned(bytes), scroll: 0, protection };
     docs.push(doc);
     current = 0;
     setBytes(bytes);
@@ -214,6 +238,56 @@ function drawPage(div) {
   img.src = url; img.dataset.key = key;
   div.style.setProperty("--k", scale);
   if (!div.querySelector(".tl")) div.appendChild(textLayer(i));
+  if (!div.querySelector(".fl") && doc.fieldList.some(f => f.page === i)) {
+    div.appendChild(formLayer(i));
+    if (refocus) { const el = div.querySelector(`[data-field="${refocus}"]`); if (el) { refocus = null; el.focus({ preventScroll: true }); } }
+  }
+}
+
+// ------------------------------------------------------------ formulaires
+
+// Calque des champs : on tape directement dans la page ; la valeur est écrite dans le PDF en quittant le champ.
+let refocus = null;
+function formLayer(i) {
+  const p = doc.pages[i], fl = document.createElement("div");
+  fl.className = "fl";
+  for (const f of doc.fieldList.filter(f => f.page === i)) {
+    const [x0, y0, x1, y1] = f.rect, key = `${f.page}:${f.index}`;
+    let el;
+    if (f.type === "checkbox" || f.type === "radiobutton") {
+      el = document.createElement("button");
+      el.type = "button"; el.className = "box";
+      el.title = (f.label || f.name) + (f.checked ? " (coché)" : "");
+      el.onclick = () => fillField(f, !f.checked, key);
+    } else if (f.type === "combobox" || f.type === "listbox") {
+      el = document.createElement("select");
+      for (const o of ["", ...f.options]) el.add(new Option(o, o, false, o === f.value));
+      el.onchange = () => fillField(f, el.value, key);
+    } else {
+      el = document.createElement(f.multiline ? "textarea" : "input");
+      el.value = f.value;
+      if (f.maxLen > 0) el.maxLength = f.maxLen;
+      el.addEventListener("focusout", e => {
+        if (el.value !== f.value) fillField(f, el.value, e.relatedTarget?.dataset?.field);
+      });
+      el.onkeydown = e => { if (e.key === "Enter" && !f.multiline) { e.preventDefault(); el.blur(); } };
+      el.style.fontSize = `calc(var(--k) * ${Math.min(12, (y1 - y0) * 0.7)}px)`;
+    }
+    el.dataset.field = key;
+    if (!el.title) el.title = f.label || f.name;
+    Object.assign(el.style, { left: 100 * x0 / p.w + "%", top: 100 * y0 / p.h + "%",
+      width: 100 * (x1 - x0) / p.w + "%", height: 100 * (y1 - y0) / p.h + "%" });
+    fl.appendChild(el);
+  }
+  return fl;
+}
+
+async function fillField(f, value, next) {
+  refocus = next || null;
+  await edit("Remplissage…", b => core.setField(b, f.page, f.index, value), `Champ « ${f.label || f.name} » rempli.`);
+  // Le champ suivant (touche Tab) reprend le curseur une fois la page redessinée.
+  const el = refocus && $(`[data-field="${refocus}"]`);
+  if (el) { refocus = null; el.focus({ preventScroll: true }); }
 }
 
 // Calque de texte transparent : chaque ligne est placée et étirée exactement sur le texte
@@ -454,6 +528,27 @@ const rotate = (i, angle) => edit("Rotation…", b => core.rotatePage(b, i, angl
 function removePage(i) {
   if (doc.pages.length === 1) return say("Impossible de supprimer la seule page du document.", true);
   if (confirm(`Supprimer la page ${i + 1} ?`)) edit("Suppression…", b => core.deletePage(b, i), "Page supprimée.");
+}
+
+// ------------------------------------------------------------ protection
+
+async function protectDoc() {
+  const dlg = $("#protect-dlg"), cur = doc.protection || {};
+  $("#pr-pass").value = $("#pr-pass2").value = cur.password || "";
+  $("#pr-print").checked = cur.print ?? true; $("#pr-copy").checked = cur.copy ?? true; $("#pr-modify").checked = cur.modify ?? true;
+  $("#pr-remove").hidden = !doc.protection;
+  for (;;) {
+    const choice = await new Promise(done => { dlg.onclose = () => done(dlg.returnValue); dlg.returnValue = ""; dlg.showModal(); $("#pr-pass").focus(); });
+    if (choice === "remove") { doc.protection = null; showInfo(); return say("Protection retirée : le PDF sera enregistré sans mot de passe ni restriction."); }
+    if (choice !== "ok") return;
+    const password = $("#pr-pass").value, opts = { print: $("#pr-print").checked, copy: $("#pr-copy").checked, modify: $("#pr-modify").checked };
+    if (password !== $("#pr-pass2").value) { say("Les deux mots de passe sont différents.", true); continue; }
+    if (/[,=]/.test(password)) { say("Le mot de passe ne peut pas contenir de virgule ni de signe =.", true); continue; }
+    if (!password && opts.print && opts.copy && opts.modify) { say("Indiquez un mot de passe ou décochez au moins une autorisation.", true); continue; }
+    doc.protection = { password, ...opts };
+    showInfo();
+    return say((password ? "Mot de passe défini" : "Restrictions définies") + " : la protection sera appliquée en enregistrant (Ctrl+S). Notez bien ce mot de passe, il ne pourra pas être retrouvé.");
+  }
 }
 
 // ------------------------------------------------------------ organiser les pages
@@ -834,10 +929,11 @@ async function save(fmt) {
   await busy(fmt === "pdf" ? "Enregistrement…" : "Conversion en cours…", async () => {
     let done;
     if (fmt === "pdf") {
-      const kept = !doc.signed || core.keepsOriginal(doc.original, doc.bytes);
+      const kept = !doc.signed || (!doc.protection && core.keepsOriginal(doc.original, doc.bytes));
       if (!kept && !confirm("Ce document était signé électroniquement. La copie enregistrée ne sera plus considérée comme signée " +
                             "(le fichier d'origine reste intact). Enregistrer quand même ?")) return say("Enregistrement annulé.");
-      done = await download(doc.bytes, `${doc.name}-modifie.pdf`, "application/pdf");
+      const out = doc.protection ? core.protect(doc.bytes, doc.protection) : doc.bytes;
+      done = await download(out, `${doc.name}-modifie.pdf`, "application/pdf");
       if (!/annulé/.test(done)) { doc.savedAt = doc.history.length; drawTabs(); }
       if (doc.signed && kept && done && !/annulé/.test(done)) done += " La signature électronique d'origine reste valable.";
     }
@@ -916,6 +1012,7 @@ $("#rotate-left").onclick = () => rotate(current, 270);
 $("#rotate-right").onclick = () => rotate(current, 90);
 $("#delete-page").onclick = () => removePage(current);
 $("#blank-page").onclick = blankPage;
+$("#protect").onclick = protectDoc;
 $("#insert-pdf").onclick = () => pickInsert(false);
 $("#append-pdf").onclick = () => pickInsert(true);
 $("#extract-pages").onclick = extractPages;

@@ -261,6 +261,80 @@ export async function deletePage(bytes, index) {
   return (await withPdfLib(bytes, doc => doc.removePage(index))).bytes;
 }
 
+// ------------------------------------------------------------ formulaires
+
+// Champs à remplir de chaque page : { page, index, name, type, value, options, rect, multiline, maxLen, checked }.
+// type : text | checkbox | radiobutton | combobox | listbox (les boutons d'action et les signatures sont ignorés).
+export function fields(doc) {
+  const out = [];
+  for (let i = 0; i < doc.countPages(); i++) {
+    const page = doc.loadPage(i);
+    try {
+      (page.getWidgets?.() || []).forEach((w, index) => {
+        const type = w.getFieldType();
+        if (!["text", "checkbox", "radiobutton", "combobox", "listbox"].includes(type) || w.isReadOnly()) return;
+        const value = w.getValue();
+        out.push({ page: i, index, name: w.getName(), label: w.getLabel(), type, value, rect: w.getRect(),
+          options: w.isChoice() ? w.getOptions() : [], multiline: type === "text" && w.isMultiline(), maxLen: type === "text" ? w.getMaxLen() : 0,
+          checked: (type === "checkbox" || type === "radiobutton") && isOn(w) });
+      });
+    } finally { page.destroy(); }
+  }
+  return out;
+}
+
+// Une case est cochée quand l'apparence affichée n'est pas « Off ».
+function isOn(w) {
+  const as = w.getObject().get("AS");
+  return as.isName() && as.asName() !== "Off";
+}
+
+// Remplit un champ : texte ou choix d'une liste ; pour une case à cocher ou un bouton radio, `value` (vrai/faux)
+// indique s'il doit être coché.
+export function setField(bytes, page, index, value) {
+  return withMu(bytes, doc => {
+    const p = doc.loadPage(page);
+    try {
+      const w = p.getWidgets()[index];
+      if (!w) throw new Error("champ introuvable");
+      const type = w.getFieldType();
+      if (type === "text") w.setTextValue(String(value));
+      else if (type === "combobox" || type === "listbox") w.setChoiceValue(String(value));
+      else if (type === "checkbox" || type === "radiobutton") { if (isOn(w) !== !!value) w.toggle(); }
+      else throw new Error("ce champ ne se remplit pas");
+      w.update();
+    } finally { p.destroy(); }
+    return saveMu(doc, bytes);
+  });
+}
+
+// ------------------------------------------------------------ protection par mot de passe
+
+export const needsPassword = bytes => withMu(bytes, doc => doc.needsPassword());
+
+// Ouvre un PDF protégé : renvoie une copie sans mot de passe, ou lève une erreur si le mot de passe est faux.
+export function unlock(bytes, password) {
+  return withMu(bytes, doc => {
+    if (doc.needsPassword() && !doc.authenticatePassword(password)) throw new Error("mot de passe incorrect");
+    return doc.saveToBuffer("encrypt=none").asUint8Array().slice();
+  });
+}
+
+// Protège le PDF (chiffrement AES 256 bits). `password` est demandé à l'ouverture (peut être vide si seules
+// des restrictions sont voulues) ; `owner` permet de lever les restrictions (généré s'il manque).
+// Les restrictions (imprimer, copier, modifier) sont respectées par les lecteurs PDF conformes.
+export function protect(bytes, { password = "", owner = "", print = true, copy = true, modify = true } = {}) {
+  for (const p of [password, owner]) if (/[,=]/.test(p)) throw new Error("le mot de passe ne peut pas contenir de virgule ni de signe =");
+  if (!owner) owner = Array.from(crypto.getRandomValues(new Uint8Array(12)), b => b.toString(16).padStart(2, "0")).join("");
+  // Droits PDF : 4 imprimer, 8 modifier, 16 copier, 32 annoter, 1024 assembler, 2048 imprimer en haute qualité.
+  let perms = -4;
+  if (!print) perms &= ~(4 | 2048);
+  if (!modify) perms &= ~(8 | 32 | 1024);
+  if (!copy) perms &= ~16;
+  return withMu(bytes, doc => doc.saveToBuffer(
+    `encrypt=aes-256,user-password=${password},owner-password=${owner},permissions=${perms},garbage=compact,compress`).asUint8Array().slice());
+}
+
 // ------------------------------------------------------------ organiser les pages
 
 // « 1-3, 5, 8-fin » -> [0, 1, 2, 4, 7, …] (pages numérotées à partir de 1, dans l'ordre donné).

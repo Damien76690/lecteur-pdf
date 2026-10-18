@@ -211,3 +211,49 @@ test("numéroter les pages et poser un filigrane", async () => {
   assert.match(text(w), /CONFIDENTIEL/);
   assert.match(text(w), /Contenu 1/);
 });
+
+// ------------------------------------------------------------ formulaires et protection
+
+async function formPdf() {
+  const d = await PDFLib.PDFDocument.create(); const p = d.addPage([400, 500]); const f = d.getForm();
+  f.createTextField("nom").addToPage(p, { x: 50, y: 400, width: 200, height: 24 });
+  f.createCheckBox("accepte").addToPage(p, { x: 50, y: 350, width: 16, height: 16 });
+  const v = f.createDropdown("ville"); v.addOptions(["Rouen", "Paris", "Évreux"]); v.addToPage(p, { x: 50, y: 300, width: 150, height: 22 });
+  const r = f.createRadioGroup("choix");
+  r.addOptionToPage("oui", p, { x: 50, y: 250, width: 14, height: 14 });
+  r.addOptionToPage("non", p, { x: 90, y: 250, width: 14, height: 14 });
+  return d.save();
+}
+
+test("remplir un formulaire", async () => {
+  let bytes = await formPdf();
+  const list = core.fields(open(bytes));
+  assert.deepEqual(list.map(f => f.type), ["text", "checkbox", "combobox", "radiobutton", "radiobutton"]);
+  assert.deepEqual(list[2].options, ["Rouen", "Paris", "Évreux"]);
+  assert.equal(core.formFields(open(bytes)), 5);
+  bytes = core.setField(bytes, 0, 0, "Durand – 105 €");
+  bytes = core.setField(bytes, 0, 1, true);
+  bytes = core.setField(bytes, 0, 2, "Évreux");
+  bytes = core.setField(bytes, 0, 4, true);
+  let after = core.fields(open(bytes));
+  assert.equal(after[0].value, "Durand – 105 €");
+  assert.deepEqual(after.map(f => f.checked), [false, true, false, false, true]);
+  assert.equal(after[2].value, "Évreux");
+  bytes = core.setField(bytes, 0, 3, true);
+  bytes = core.setField(bytes, 0, 1, false);
+  after = core.fields(open(bytes));
+  assert.deepEqual(after.map(f => f.checked), [false, false, false, true, false], "un seul bouton radio coché");
+});
+
+test("protéger par mot de passe puis rouvrir", async () => {
+  const locked = core.protect(facture(), { password: "secret", print: false });
+  assert.ok(core.needsPassword(locked));
+  assert.ok(!core.needsPassword(facture()));
+  assert.throws(() => core.unlock(locked, "faux"), /incorrect/);
+  const back = core.unlock(locked, "secret");
+  assert.ok(!core.needsPassword(back));
+  assert.match(text(back), /Société Dupont/);
+  // Restrictions seules : s'ouvre sans mot de passe.
+  assert.ok(!core.needsPassword(core.protect(facture(), { copy: false })));
+  assert.throws(() => core.protect(facture(), { password: "a,b" }), /virgule/);
+});
