@@ -24,6 +24,9 @@ Les commandes sont rangées dans des onglets, comme dans Word : **Fichier**, **A
 | Rechercher un mot dans tout le document | **Accueil › Rechercher** (Ctrl+F, puis Entrée ou F3 pour l'occurrence suivante, Maj+Entrée pour la précédente) ; majuscules et accents ignorés |
 | Signets du PDF, pages en miniature | **Accueil › Panneau** : onglets **Signets** et **Pages**, cliquez pour y aller |
 | Copier du texte | En mode Lecture, sélectionnez le texte à la souris puis Ctrl+C |
+| Plusieurs documents | Chaque PDF ouvert a son onglet (Ctrl+Tab pour passer au suivant, Ctrl+W pour fermer) |
+| Deux pages côte à côte, plein écran | **Accueil › Deux pages**, **⛶** (F11) ; Ctrl + molette pour zoomer |
+| Documents récents (application Windows) | Page d'accueil ou **Fichier › Récents** |
 | Annuler, rétablir | **Accueil** (Ctrl+Z, Ctrl+Y) |
 | Zoom, largeur de page, page entière, aller à une page | **Accueil** |
 | Surligner, souligner, barrer du texte | **Commenter**, puis faites glisser sur le texte |

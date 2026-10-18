@@ -17,7 +17,9 @@ const OCR_ZOOM = 3.5;         // résolution envoyée à l'OCR (~250 dpi)
 const MAX_UNDO = 30;
 
 let ready = false;
-let doc = null;               // { name, bytes, pages, history, mu, version }
+let doc = null;               // document affiché : { name, bytes, pages, history, mu, version… }
+const docs = [];              // tous les documents ouverts (un onglet chacun)
+let twoPages = false;         // affichage deux pages côte à côte
 let mode = "read";
 let zoom = 1;                 // 1 = 100 % ; ou "width" / "page" (ajusté à la fenêtre)
 let current = 0;              // page affichée (la plus visible)
@@ -67,6 +69,9 @@ function setTitle(text) {
   window.pywebview?.api?.titre?.(text);
 }
 
+// Modifié depuis l'ouverture ou le dernier enregistrement ?
+const modified = d => d.history.length !== (d.savedAt ?? 0);
+
 const plural = (n, word) => `${n} ${word}${n > 1 ? "s" : ""}`;
 
 // Bandeau d'information : document signé électroniquement, champs de formulaire.
@@ -82,22 +87,84 @@ function showInfo() {
 
 async function openBytes(bytes, name) {
   if (!ready) return say("Patientez, le lecteur se charge…");
+  // Déjà ouvert (même nom, même contenu) : on affiche simplement son onglet.
+  const same = docs.find(d => d.name === name && d.original.length === bytes.length && core.keepsOriginal(d.original, bytes));
+  if (same) { activate(same); return say(`${name}.pdf est déjà ouvert.`); }
   await busy("Ouverture…", async () => {
     try { core.pageInfo(bytes); } catch { throw new Error("ce fichier n'est pas un PDF lisible"); }
-    doc?.mu?.destroy();
-    doc = { name, history: [], future: [], version: 0, original: bytes, signed: core.isSigned(bytes) };
+    remember();
+    doc = { name, history: [], future: [], version: 0, original: bytes, signed: core.isSigned(bytes), scroll: 0 };
+    docs.push(doc);
     current = 0;
     setBytes(bytes);
     doc.fields = core.formFields(doc.mu);
-    $("#drop").hidden = true;
-    $("#docname").textContent = name + ".pdf";
-    setTitle(name + ".pdf – Mim PDF");
-    $("#find").value = "";
-    showInfo();
+    showDoc();
     if (innerWidth > 900) openSide(doc.outline.length ? "outline" : "thumbs");
   });
+  showRecents();
   if (doc) say(`${doc.name} : ${plural(doc.pages.length, "page")}.` + (core.needsOcr(doc.pages)
     ? " Ce PDF semble être une image (scan) : cliquez sur « Reconnaître le texte (OCR) » pour pouvoir le modifier ou le convertir." : ""));
+}
+
+// ------------------------------------------------------------ onglets (plusieurs documents)
+
+// Garde la position de lecture du document affiché avant d'en afficher un autre.
+function remember() {
+  if (doc) Object.assign(doc, { scroll: scrollY, page: current });
+}
+
+// Met l'interface aux couleurs du document affiché (titre, bandeau, onglets…).
+function showDoc() {
+  $("#drop").hidden = true;
+  $("#docname").textContent = doc.name + ".pdf";
+  setTitle(doc.name + ".pdf – Mim PDF");
+  $("#find").value = ""; $("#find-count").textContent = ""; found = null;
+  showInfo();
+  drawTabs();
+}
+
+function activate(d) {
+  if (d === doc || document.body.classList.contains("busy")) return;
+  remember();
+  doc = d;
+  current = d.page || 0;
+  render(); refreshList(); refreshSide(); showDoc(); setButtons(false);
+  scrollTo(0, d.scroll || 0);
+  say(`${doc.name} : ${plural(doc.pages.length, "page")}.`);
+}
+
+function closeDoc(d = doc) {
+  if (!d) return;
+  if (modified(d) && !confirm(`Fermer « ${d.name}.pdf » sans enregistrer les modifications ?`)) return;
+  const k = docs.indexOf(d);
+  docs.splice(k, 1);
+  d.mu?.destroy();
+  if (d !== doc) return drawTabs();
+  doc = null;
+  if (docs.length) return activate(docs[Math.min(k, docs.length - 1)]);
+  observer.disconnect();
+  $$("#pages .page img").forEach(img => img.src && URL.revokeObjectURL(img.src));
+  $("#pages").innerHTML = ""; $("#list").hidden = true;
+  $("#drop").hidden = false; $("#docname").textContent = ""; $("#count").textContent = "/ 0";
+  $("#info").hidden = true; closeSide(); found = null; $("#find").value = ""; $("#find-count").textContent = "";
+  setTitle("Mim PDF"); drawTabs(); showRecents();
+  setButtons(false); say("Ouvrez un PDF pour commencer.");
+}
+
+function drawTabs() {
+  const bar = $("#doctabs");
+  bar.hidden = docs.length < 2;
+  bar.innerHTML = "";
+  for (const d of docs) {
+    const tab = document.createElement("div");
+    tab.className = "doctab" + (d === doc ? " on" : "");
+    tab.title = d.name + ".pdf";
+    tab.innerHTML = `<span></span><button title="Fermer ce document">✖</button>`;
+    tab.querySelector("span").textContent = (modified(d) ? "• " : "") + d.name;
+    tab.onclick = () => activate(d);
+    tab.querySelector("button").onclick = e => { e.stopPropagation(); closeDoc(d); };
+    bar.appendChild(tab);
+  }
 }
 
 async function openFile(file) {
@@ -119,7 +186,7 @@ async function edit(message, fn, done) {
     const broke = doc.signed && core.keepsOriginal(doc.original, before) && !core.keepsOriginal(doc.original, after);
     say((typeof done === "function" ? done() : done) +
         (broke ? " Attention : cette modification rend la signature électronique invalide dans la copie (Ctrl+Z pour annuler)." : ""));
-    showInfo();
+    showInfo(); drawTabs();
   });
 }
 
@@ -131,7 +198,7 @@ const observer = new IntersectionObserver(entries => {
 
 // Pixels écran par point PDF pour la page `p`, selon le zoom choisi.
 function scaleFor(p) {
-  const box = $("#pages"), width = box.clientWidth - 30, height = window.innerHeight - box.getBoundingClientRect().top - 40;
+  const box = $("#pages"), width = (twoPages ? (box.clientWidth - 48) / 2 : box.clientWidth - 30), height = window.innerHeight - box.getBoundingClientRect().top - 40;
   if (zoom === "width") return Math.max(width / p.w, 0.2);
   if (zoom === "page") return Math.max(Math.min(width / p.w, height / p.h), 0.2);
   return zoom * PT;
@@ -696,6 +763,7 @@ async function save(fmt) {
       if (!kept && !confirm("Ce document était signé électroniquement. La copie enregistrée ne sera plus considérée comme signée " +
                             "(le fichier d'origine reste intact). Enregistrer quand même ?")) return say("Enregistrement annulé.");
       done = await download(doc.bytes, `${doc.name}-modifie.pdf`, "application/pdf");
+      if (!/annulé/.test(done)) { doc.savedAt = doc.history.length; drawTabs(); }
       if (doc.signed && kept && done && !/annulé/.test(done)) done += " La signature électronique d'origine reste valable.";
     }
     if (fmt === "txt") done = await download(core.toText(rows()), `${doc.name}.txt`, "text/plain;charset=utf-8");
@@ -747,12 +815,12 @@ $("#replace").onclick = () => {
 function undo() {
   if (!doc?.history.length) return;
   doc.future.push(doc.bytes);
-  setBytes(doc.history.pop()); setButtons(false); say("Annulé.");
+  setBytes(doc.history.pop()); setButtons(false); say("Annulé."); showInfo(); drawTabs();
 }
 function redo() {
   if (!doc?.future.length) return;
   doc.history.push(doc.bytes);
-  setBytes(doc.future.pop()); setButtons(false); say("Rétabli.");
+  setBytes(doc.future.pop()); setButtons(false); say("Rétabli."); showInfo(); drawTabs();
 }
 $("#undo").onclick = undo;
 $("#stamp").innerHTML = core.STAMPS.map(t => `<option>${t}</option>`).join("");
@@ -772,16 +840,31 @@ $("#goto").onchange = e => goTo(+e.target.value - 1);
 $("#rotate-left").onclick = () => rotate(current, 270);
 $("#rotate-right").onclick = () => rotate(current, 90);
 $("#delete-page").onclick = () => removePage(current);
-$("#close").onclick = () => {
-  if (doc.history.length && !confirm("Fermer sans enregistrer les modifications ?")) return;
-  observer.disconnect();
-  $$("#pages .page img").forEach(img => img.src && URL.revokeObjectURL(img.src));
-  $("#pages").innerHTML = ""; doc.mu?.destroy(); doc = null; $("#list").hidden = true;
-  $("#drop").hidden = false; $("#docname").textContent = ""; $("#count").textContent = "/ 0";
-  $("#info").hidden = true; closeSide(); found = null; $("#find").value = ""; $("#find-count").textContent = "";
-  setTitle("Mim PDF");
-  setButtons(false); say("Ouvrez un PDF pour commencer.");
+$("#close").onclick = () => closeDoc();
+$("#two-pages").onclick = () => {
+  twoPages = !twoPages;
+  $("#two-pages").classList.toggle("on", twoPages);
+  $("#pages").classList.toggle("two", twoPages);
+  if (doc) setZoom(twoPages && typeof zoom === "number" ? "width" : zoom);
 };
+$("#fullscreen").onclick = toggleFullscreen;
+function toggleFullscreen() {
+  const api = window.pywebview?.api;
+  if (api?.plein_ecran) return api.plein_ecran();
+  if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen?.();
+}
+// Ctrl + molette : zoom (comme dans Nitro, Word, les navigateurs…).
+let wheeling = 0;
+addEventListener("wheel", e => {
+  if (!e.ctrlKey || !doc) return;
+  e.preventDefault();
+  const now = Date.now();
+  if (now - wheeling < 120) return;
+  wheeling = now;
+  zoomStep(e.deltaY < 0 ? 1 : -1);
+}, { passive: false });
+// Hauteur du bandeau du haut (onglets, ruban, messages) : les panneaux latéraux se placent dessous.
+new ResizeObserver(() => document.body.style.setProperty("--head", $("header").offsetHeight + "px")).observe($("header"));
 let scrolling = 0;
 addEventListener("scroll", () => { cancelAnimationFrame(scrolling); scrolling = requestAnimationFrame(trackCurrent); });
 let resizing = 0;
@@ -794,12 +877,19 @@ document.addEventListener("keydown", e => {
     return;
   }
   if (ctrl && k === "p") { e.preventDefault(); printDoc(); return; }
+  if (ctrl && k === "w") { e.preventDefault(); closeDoc(); return; }
+  if (ctrl && e.key === "Tab" && docs.length > 1) {
+    e.preventDefault();
+    activate(docs[(docs.indexOf(doc) + (e.shiftKey ? -1 : 1) + docs.length) % docs.length]);
+    return;
+  }
+  if (e.key === "F11") { e.preventDefault(); toggleFullscreen(); return; }
   if (e.key === "F3") { e.preventDefault(); find(e.shiftKey ? -1 : 1); return; }
   if (e.target.matches("input, textarea, select") && e.key !== "Escape") return;
   if (ctrl && k === "z" && !e.shiftKey) { e.preventDefault(); undo(); }
   else if (ctrl && (k === "y" || (k === "z" && e.shiftKey))) { e.preventDefault(); redo(); }
   else if (ctrl && k === "s" && doc) { e.preventDefault(); save("pdf"); }
-  else if (ctrl && k === "o") { e.preventDefault(); $("#file").click(); }
+  else if (ctrl && k === "o") { e.preventDefault(); window.pywebview?.api?.ouvrir ? window.pywebview.api.ouvrir() : $("#file").click(); }
   else if (e.key === "Escape") setMode("read");
 });
 $("#find").onkeydown = e => { if (e.key === "Enter") { e.preventDefault(); find(e.shiftKey ? -1 : 1); } };
@@ -830,7 +920,7 @@ window.mimMiseAJour = version => {
   $("#maj").hidden = false;
 };
 $("#maj-installer").onclick = async () => {
-  if (doc?.history.length && !confirm("Redémarrer sans enregistrer les modifications ?")) return;
+  if (docs.some(modified) && !confirm("Redémarrer sans enregistrer les modifications ?")) return;
   say((await window.pywebview.api.installer_mise_a_jour()).message);
 };
 async function versionBureau() {
@@ -850,12 +940,11 @@ window.mimFichiersDemandes = async () => {
   if (demandeEnCours) return void (autreDemande = true);
   demandeEnCours = true;
   try {
-    const f = (await window.pywebview.api.fichiers_demandes()).pop();  // un seul document à la fois : le dernier
-    if (!f) return;
-    if (doc?.history.length && !confirm(`Ouvrir « ${f.nom} » sans enregistrer les modifications de « ${doc.name}.pdf » ?`)) return;
-    const r = await fetch(f.url);
-    if (!r.ok) return say(`Impossible de lire « ${f.nom} ».`, true);
-    await openBytes(new Uint8Array(await r.arrayBuffer()), f.nom.replace(/\.pdf$/i, ""));
+    for (const f of await window.pywebview.api.fichiers_demandes()) {   // chacun dans son onglet
+      const r = await fetch(f.url);
+      if (!r.ok) { say(`Impossible de lire « ${f.nom} ».`, true); continue; }
+      await openBytes(new Uint8Array(await r.arrayBuffer()), f.nom.replace(/\.pdf$/i, ""));
+    }
   } catch (e) {
     console.error(e); say("Erreur : " + (e.message || e), true);
   } finally {
@@ -863,7 +952,39 @@ window.mimFichiersDemandes = async () => {
     if (autreDemande) { autreDemande = false; window.mimFichiersDemandes(); }
   }
 };
-addEventListener("pywebviewready", () => window.mimFichiersDemandes(), { once: true });
+addEventListener("pywebviewready", () => { window.mimFichiersDemandes(); showRecents(); }, { once: true });
+
+// Documents récents (application Windows : elle connaît le chemin des fichiers ouverts).
+async function showRecents() {
+  const api = window.pywebview?.api;
+  if (!api?.recents) return;
+  const list = await api.recents();
+  const box = $("#recents"), sel = $("#recent");
+  box.innerHTML = ""; box.hidden = !list.length;
+  sel.innerHTML = '<option value="">Documents récents…</option>';
+  sel.parentElement.closest(".group").hidden = !list.length;
+  if (!list.length) return;
+  box.innerHTML = "<strong>Documents récents</strong>";
+  for (const r of list) {
+    const b = document.createElement("button");
+    b.className = "recent"; b.title = r.chemin;
+    b.innerHTML = `<span></span><small></small>`;
+    b.querySelector("span").textContent = r.nom;
+    b.querySelector("small").textContent = r.dossier;
+    b.onclick = () => api.ouvrir_recent(r.chemin);
+    box.appendChild(b);
+    sel.appendChild(Object.assign(document.createElement("option"), { value: r.chemin, textContent: r.nom, title: r.chemin }));
+  }
+}
+$("#recent").onchange = e => { if (e.target.value) window.pywebview.api.ouvrir_recent(e.target.value); e.target.value = ""; };
+// Dans l'application Windows, « Ouvrir » passe par la fenêtre de Windows : le chemin du fichier
+// est connu, il rejoint les documents récents (plusieurs fichiers possibles, un onglet chacun).
+$$("label.btn:has(input[type=file])").forEach(l => l.addEventListener("click", e => {
+  const api = window.pywebview?.api;
+  if (!api?.ouvrir || e.target.matches("input")) return;
+  e.preventDefault();
+  api.ouvrir();
+}));
 
 // ------------------------------------------------------------ démarrage
 

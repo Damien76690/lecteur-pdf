@@ -41,7 +41,7 @@
   button:disabled { opacity:.45; cursor:default; }
   select { font:inherit; padding:5px; border:1px solid var(--border); border-radius:6px; background:#fff; }
   input[type=text] { font:inherit; padding:6px; border:1px solid var(--border); border-radius:6px; width:120px; }
-  #goto { width:56px; } #count { color:var(--muted); padding:0 4px; }
+  #goto { width:56px; } #count { color:var(--muted); padding:0 4px; white-space:nowrap; }
   input[type=number] { width:52px; padding:5px; border:1px solid var(--border); border-radius:6px; }
   #msg { padding:8px 12px; color:var(--muted); min-height:34px; }
   #msg.err { color:#b91c1c; }
@@ -56,7 +56,7 @@
   button.link { border:none; background:none; color:var(--accent); padding:0; text-decoration:underline; font-size:inherit; }
   main { display:flex; align-items:flex-start; }
   main #pages { flex:1; min-width:0; }
-  #list { position:sticky; top:150px; width:300px; max-height:calc(100vh - 170px); overflow:auto; margin:8px 12px 0 0;
+  #list { position:sticky; top:calc(var(--head, 150px) + 8px); width:300px; max-height:calc(100vh - var(--head, 150px) - 20px); overflow:auto; margin:8px 12px 0 0;
           background:var(--panel); border:1px solid var(--border); border-radius:10px; }
   .list-head { display:flex; justify-content:space-between; align-items:center; padding:8px 10px; border-bottom:1px solid var(--border); }
   .list-head button { border:none; padding:2px 6px; }
@@ -97,8 +97,8 @@
   #info { display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:8px 12px; background:#fffbeb;
           border-bottom:1px solid #fde68a; color:#78350f; }
   #info button { padding:2px 8px; font-size:12px; }
-  #find { width:170px; } #find-count { color:var(--muted); font-size:12px; min-width:64px; text-align:center; }
-  #side { position:sticky; top:150px; width:230px; flex:none; max-height:calc(100vh - 170px); display:flex; flex-direction:column;
+  #find { width:140px; } #find-count { color:var(--muted); font-size:12px; min-width:64px; text-align:center; }
+  #side { position:sticky; top:calc(var(--head, 150px) + 8px); width:230px; flex:none; max-height:calc(100vh - var(--head, 150px) - 20px); display:flex; flex-direction:column;
           margin:8px 0 0 12px; background:var(--panel); border:1px solid var(--border); border-radius:10px; overflow:hidden; }
   .side-tabs { display:flex; gap:2px; padding:4px; border-bottom:1px solid var(--border); }
   .side-tabs button { border:none; padding:4px 10px; }
@@ -130,6 +130,18 @@
     #print { display:block; }
     #print img { display:block; width:100%; break-after:page; }
   }
+  #doctabs { display:flex; gap:2px; padding:4px 12px 0; background:var(--panel); border-top:1px solid var(--border); overflow-x:auto; }
+  .doctab { display:flex; align-items:center; gap:6px; padding:5px 6px 5px 12px; border:1px solid var(--border); border-bottom:none;
+            border-radius:8px 8px 0 0; background:var(--bg); cursor:pointer; max-width:240px; white-space:nowrap; }
+  .doctab span { overflow:hidden; text-overflow:ellipsis; }
+  .doctab.on { background:#fff; color:var(--accent); font-weight:600; box-shadow:inset 0 3px 0 var(--accent); }
+  .doctab button { border:none; background:none; padding:0 4px; font-size:11px; color:var(--muted); }
+  #pages.two { flex-direction:row; flex-wrap:wrap; justify-content:center; align-content:flex-start; }
+  #recents { display:flex; flex-direction:column; align-items:stretch; gap:4px; margin-top:18px; text-align:left; }
+  #recents strong { color:var(--text); }
+  button.recent { display:flex; flex-direction:column; align-items:flex-start; text-align:left; margin:0; }
+  button.recent small { color:var(--muted); overflow:hidden; text-overflow:ellipsis; max-width:100%; }
+  #recent { max-width:220px; }
   footer { text-align:center; color:var(--muted); font-size:12px; padding:0 12px 24px; }
   footer a { color:inherit; }
 </style>
@@ -161,6 +173,9 @@
         <button class="big" data-sample="facture"><span class="ic">🧾</span>Facture d'exemple</button>
         <button class="big" data-sample="facture-scannee"><span class="ic">🖨</span>Facture scannée</button>
       </div><span class="gl">Essayer</span></div>
+      <div class="group" hidden><div class="tools">
+        <select id="recent" title="Rouvrir un document récent"></select>
+      </div><span class="gl">Récents</span></div>
     </section>
     <section data-panel="accueil">
       <div class="group"><div class="tools">
@@ -183,7 +198,9 @@
           <option value="3">300 %</option><option value="width">Largeur de page</option><option value="page">Page entière</option>
         </select>
         <button id="zoom-in" title="Zoom avant">+</button>
-        <button id="side-toggle" title="Afficher les signets et les pages en miniature">☰ Panneau</button>
+        <span class="stack"><button id="side-toggle" title="Afficher les signets et les pages en miniature">☰ Panneau</button>
+        <button id="two-pages" title="Afficher deux pages côte à côte">▯▯ Deux pages</button></span>
+        <button id="fullscreen" title="Plein écran (F11)">⛶</button>
       </div><span class="gl">Affichage</span></div>
       <div class="group"><div class="tools">
         <button id="prev" title="Page précédente">▲</button>
@@ -284,6 +301,7 @@
       Elle s'installera toute seule quand vous fermerez Mim PDF.</span>
     <button id="maj-installer" class="primary">Redémarrer et mettre à jour</button>
   </div>
+  <div id="doctabs" hidden></div>
   <div id="info" hidden></div>
 </header>
 <div id="msg">Chargement…</div>
@@ -292,6 +310,7 @@
   <strong>Vos fichiers restent sur votre ordinateur</strong> : rien n'est envoyé sur Internet.<br>
   <button data-sample="facture">Essayer avec une facture d'exemple</button>
   <button data-sample="facture-scannee">… ou une facture scannée</button>
+  <div id="recents" hidden></div>
 </div>
 <main>
   <aside id="side" hidden>
