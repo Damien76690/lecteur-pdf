@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <title>Mim PDF</title>
+  <!-- Mim, le chat de Mim PDF : dessin original (licence AGPL-3.0, comme le logiciel). -->
+  <rect width="256" height="256" rx="56" fill="#4338ca"/>
+  <g stroke-linejoin="round">
+    <path d="M58 104 L66 30 L118 68 Z" fill="#f59e0b" stroke="#f59e0b" stroke-width="14"/>
+    <path d="M198 104 L190 30 L138 68 Z" fill="#f59e0b" stroke="#f59e0b" stroke-width="14"/>
+    <path d="M72 84 L76 50 L100 68 Z" fill="#fda4af" stroke="#fda4af" stroke-width="6"/>
+    <path d="M184 84 L180 50 L156 68 Z" fill="#fda4af" stroke="#fda4af" stroke-width="6"/>
+  </g>
+  <ellipse cx="128" cy="122" rx="82" ry="66" fill="#f59e0b"/>
+  <path d="M108 62 q20 -8 40 0 M112 76 q16 -6 32 0" stroke="#d97706" stroke-width="7" stroke-linecap="round" fill="none"/>
+  <ellipse cx="96" cy="118" rx="12" ry="16" fill="#1e1b4b"/>
+  <ellipse cx="160" cy="118" rx="12" ry="16" fill="#1e1b4b"/>
+  <circle cx="100" cy="111" r="4.5" fill="#fff"/>
+  <circle cx="164" cy="111" r="4.5" fill="#fff"/>
+  <path d="M120 138 h16 l-8 9 z" fill="#e11d48" stroke="#e11d48" stroke-width="4" stroke-linejoin="round"/>
+  <path d="M128 147 q-6 9 -14 5 M128 147 q6 9 14 5" stroke="#1e1b4b" stroke-width="4" stroke-linecap="round" fill="none"/>
+  <path d="M60 134 l-30 -6 M60 146 l-30 4 M196 134 l30 -6 M196 146 l30 4" stroke="#fff" stroke-width="4" stroke-linecap="round" opacity=".85"/>
+  <rect x="50" y="164" width="156" height="72" rx="12" fill="#fff"/>
+  <path d="M74 194 h108 M74 214 h72" stroke="#c7d2fe" stroke-width="9" stroke-linecap="round"/>
+  <rect x="160" y="204" width="30" height="20" rx="4" fill="#e11d48"/>
+  <ellipse cx="94" cy="166" rx="20" ry="13" fill="#fbbf24"/>
+  <ellipse cx="162" cy="166" rx="20" ry="13" fill="#fbbf24"/>
+  <path d="M86 160 v10 M94 159 v11 M102 160 v10 M154 160 v10 M162 159 v11 M170 160 v10" stroke="#d97706" stroke-width="3" stroke-linecap="round"/>
+</svg>

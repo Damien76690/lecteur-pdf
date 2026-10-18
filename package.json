@@ -1,7 +1,7 @@
 {
-  "name": "lecteur-pdf-web",
+  "name": "mim-pdf-web",
   "private": true,
-  "description": "Version en ligne du lecteur PDF libre (tout se passe dans le navigateur)",
+  "description": "Version en ligne de Mim PDF (tout se passe dans le navigateur)",
   "license": "AGPL-3.0-or-later",
   "type": "module",
   "scripts": {

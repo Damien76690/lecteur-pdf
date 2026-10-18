@@ -31,6 +31,7 @@ jobs:
           npm ci
           npm test
           npm run build -- build/site
+          Set-Content build/site/version.json '{"version":"1.0.${{ github.run_number }}"}'
 
       - name: Installer les composants Python
         run: |
@@ -41,18 +42,18 @@ jobs:
         timeout-minutes: 3
         run: python bureau.py --verifier
 
-      - name: Compiler LecteurPDF.exe
-        run: pyinstaller --noconfirm --distpath dist --workpath build\pyinstaller windows\lecteur-pdf.spec
+      - name: Compiler MimPDF.exe
+        run: pyinstaller --noconfirm --distpath dist --workpath build\pyinstaller windows\mim-pdf.spec
 
       - name: Vérifier l'application compilée (site complet, ouverture d'un PDF)
         timeout-minutes: 10
         shell: pwsh
         run: |
-          $p = Start-Process "dist\LecteurPDF\LecteurPDF.exe" -ArgumentList "--verifier" -Wait -PassThru
-          Get-Content "$env:LOCALAPPDATA\LecteurPDF\journal.txt" -ErrorAction SilentlyContinue | Select-Object -Last 30
+          $p = Start-Process "dist\MimPDF\MimPDF.exe" -ArgumentList "--verifier" -Wait -PassThru
+          Get-Content "$env:LOCALAPPDATA\MimPDF\journal.txt" -ErrorAction SilentlyContinue | Select-Object -Last 30
           if ($p.ExitCode -ne 0) { throw "La vérification a échoué (code $($p.ExitCode))" }
-          $p = Start-Process "dist\LecteurPDF\LecteurPDF.exe" -ArgumentList "--essai-fenetre" -Wait -PassThru
-          Get-Content "$env:LOCALAPPDATA\LecteurPDF\journal.txt" -ErrorAction SilentlyContinue | Select-Object -Last 30
+          $p = Start-Process "dist\MimPDF\MimPDF.exe" -ArgumentList "--essai-fenetre" -Wait -PassThru
+          Get-Content "$env:LOCALAPPDATA\MimPDF\journal.txt" -ErrorAction SilentlyContinue | Select-Object -Last 30
           if ($p.ExitCode -ne 0) { throw "La fenêtre ne s'est pas ouverte (code $($p.ExitCode))" }
 
       - name: Fabriquer l'installateur
@@ -64,29 +65,31 @@ jobs:
           if (-not $iscc) { $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }
           & $iscc "/DVersion=1.0.${{ github.run_number }}" windows\installateur.iss
           if ($LASTEXITCODE -ne 0) { throw "Inno Setup a échoué" }
-          Compress-Archive dist\LecteurPDF dist\LecteurPDF-portable.zip
+          Compress-Archive dist\MimPDF dist\MimPDF-portable.zip
           Get-ChildItem dist\*.exe, dist\*.zip | Format-Table Name, @{n="Mo";e={[math]::Round($_.Length / 1MB, 1)}}
 
       - uses: actions/upload-artifact@v4
         with:
-          name: LecteurPDF-windows
+          name: MimPDF-windows
           path: |
-            dist/LecteurPDF-installation.exe
-            dist/LecteurPDF-portable.zip
+            dist/MimPDF-installation.exe
+            dist/MimPDF-portable.zip
 
       - name: Publier la version
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v1.0.${{ github.run_number }}
-          name: Lecteur PDF libre 1.0.${{ github.run_number }}
+          name: Mim PDF 1.0.${{ github.run_number }}
           make_latest: true
           body: |
-            **Installer :** téléchargez `LecteurPDF-installation.exe`, double-cliquez dessus et suivez les étapes (aucun droit administrateur nécessaire). L'application apparaît ensuite dans le menu Démarrer et sur le Bureau.
+            **Installer :** téléchargez `MimPDF-installation.exe`, double-cliquez dessus et suivez les étapes (aucun droit administrateur nécessaire). L'application apparaît ensuite dans le menu Démarrer et sur le Bureau.
 
-            **Sans installation :** `LecteurPDF-portable.zip`, à décompresser, puis double-clic sur `LecteurPDF.exe`.
+            **Sans installation :** `MimPDF-portable.zip`, à décompresser, puis double-clic sur `MimPDF.exe`.
+
+            **Déjà installé ?** Mim PDF se met à jour tout seul : il télécharge la nouvelle version en arrière-plan et l'installe quand vous le fermez (ou tout de suite avec « Redémarrer et mettre à jour »).
 
             La reconnaissance de texte (OCR, français et anglais) est incluse et tout fonctionne sans Internet.
           files: |
-            dist/LecteurPDF-installation.exe
-            dist/LecteurPDF-portable.zip
+            dist/MimPDF-installation.exe
+            dist/MimPDF-portable.zip
