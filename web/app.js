@@ -225,16 +225,20 @@ async function edit(message, fn, done) {
   await busy(message, async () => {
     const before = doc.bytes;
     const after = await fn(before);
-    if (!after) return;
-    doc.history.push(before);
-    if (doc.history.length > MAX_UNDO) doc.history.shift();
-    doc.future = [];
-    setBytes(after);
-    const broke = doc.signed && core.keepsOriginal(doc.original, before) && !core.keepsOriginal(doc.original, after);
-    say((typeof done === "function" ? done() : done) +
-        (broke ? " Attention : cette modification rend la signature électronique invalide dans la copie (Ctrl+Z pour annuler)." : ""));
-    showInfo(); drawTabs();
+    if (after) commit(before, after, done);
   });
+}
+
+// Remplace le document par sa version modifiée, en gardant de quoi annuler.
+function commit(before, after, done) {
+  doc.history.push(before);
+  if (doc.history.length > MAX_UNDO) doc.history.shift();
+  doc.future = [];
+  setBytes(after);
+  const broke = doc.signed && core.keepsOriginal(doc.original, before) && !core.keepsOriginal(doc.original, after);
+  say((typeof done === "function" ? done() : done) +
+      (broke ? " Attention : cette modification rend la signature électronique invalide dans la copie (Ctrl+Z pour annuler)." : ""));
+  showInfo(); drawTabs();
 }
 
 // ------------------------------------------------------------ affichage
@@ -1015,22 +1019,23 @@ function toggleList(show = $("#list").hidden) {
 
 // ------------------------------------------------------------ OCR
 
-async function ocr() {
+// `only` : numéros des pages à lire (toutes par défaut).
+async function ocr(_, only = doc.pages.map((p, i) => i)) {
   await loadScript(LIBS.tesseract);
   let current = 0;
   say("Préparation de la reconnaissance du texte…");
   const worker = await Tesseract.createWorker(["fra", "eng"], 1, {
     workerPath: vendorUrl("worker.min.js"), corePath: vendorUrl("core"), langPath: vendorUrl("lang"),
-    logger: m => m.status === "recognizing text" && say(`Reconnaissance du texte : page ${current + 1} / ${doc.pages.length} (${Math.round(m.progress * 100)} %)…`),
+    logger: m => m.status === "recognizing text" && say(`Reconnaissance du texte : page ${current + 1} / ${only.length} (${Math.round(m.progress * 100)} %)…`),
   });
   // Mode 3 (mise en page automatique) : lit aussi les tableaux, contrairement au mode par défaut.
   await worker.setParameters({ tessedit_pageseg_mode: "3" });
   const pages = [];
   try {
-    for (; current < doc.pages.length; current++) {
-      const png = core.renderPage(doc.mu, current, OCR_ZOOM);
+    for (; current < only.length; current++) {
+      const png = core.renderPage(doc.mu, only[current], OCR_ZOOM);
       const { data } = await worker.recognize(new Blob([png], { type: "image/png" }));
-      pages.push({ index: current, zoom: OCR_ZOOM, words: data.words.filter(w => w.confidence > 20) });
+      pages.push({ index: only[current], zoom: OCR_ZOOM, words: data.words.filter(w => w.confidence > 20) });
     }
   } finally { await worker.terminate(); }
   if (!pages.some(p => p.words.length)) throw new Error("aucun texte reconnu");
@@ -1061,11 +1066,19 @@ async function download(data, name, type) {
 async function save(fmt) {
   const rows = () => {
     const r = core.extractRows(doc.bytes);
-    if (!r.some(p => p.length)) throw new Error("aucun texte dans ce PDF. Si c'est un scan, lancez d'abord la reconnaissance du texte (OCR)");
+    if (!r.some(p => p.length)) throw new Error("aucun texte trouvé dans ce PDF, même après la reconnaissance du texte");
     return r;
   };
   await busy(fmt === "pdf" ? "Enregistrement…" : "Conversion en cours…", async () => {
     let done;
+    // Pages scannées (sans texte) : on lit d'abord leur texte, sinon la conversion serait vide.
+    const scans = fmt === "pdf" ? [] : doc.pages.flatMap((p, i) => p.hasText ? [] : [i]);
+    if (scans.length) {
+      say(`Ce PDF est scanné : lecture du texte de ${scans.length} page${scans.length > 1 ? "s" : ""} avant la conversion…`);
+      const before = doc.bytes;
+      commit(before, await ocr(before, scans), "Texte reconnu.");
+      say("Texte reconnu, conversion en cours…");
+    }
     if (fmt === "pdf") {
       const kept = !doc.signed || (!doc.protection && core.keepsOriginal(doc.original, doc.bytes));
       if (!kept && !confirm("Ce document était signé électroniquement. La copie enregistrée ne sera plus considérée comme signée " +
@@ -1085,6 +1098,7 @@ async function save(fmt) {
       await loadScript(LIBS.docx);
       done = await download(await core.toDocx(docx, rows()), `${doc.name}.docx`);
     }
+    if (scans.length && done && !/annulé/.test(done)) done += " Le texte a été lu automatiquement sur le scan : vérifiez les chiffres importants.";
     say(done);
   });
 }

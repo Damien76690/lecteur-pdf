@@ -35,7 +35,7 @@ Les commandes sont rangées dans des onglets, comme dans Word : **Fichier**, **A
 | Écrire sur la page (taille et couleur réglables) | **Modifier › Écrire**, puis cliquez à l'endroit voulu |
 | Corriger un texte | **Modifier** : Rechercher / Remplacer par, puis **Remplacer** (toutes les occurrences) |
 | Effacer une zone | **Modifier › Effacer une zone**, puis tracez un rectangle (le contenu est réellement supprimé) |
-| PDF scanné → texte | **Modifier › Reconnaître le texte** : le PDF devient sélectionnable, modifiable et convertible |
+| PDF scanné → texte | **Modifier › Reconnaître le texte** : le PDF devient sélectionnable, modifiable et convertible. Les boutons Word, Excel et Texte le font d'eux-mêmes sur un scan |
 | Pivoter, supprimer une page | **Pages**, ou boutons ⟳ et 🗑 en haut à droite de chaque page |
 | Changer l'ordre des pages | Glissez une miniature du panneau **Pages** à sa nouvelle place |
 | Ajouter une page blanche, insérer un autre PDF, fusionner | **Pages › Page blanche / Insérer un PDF / Fusionner** (insérer : après la page affichée ; fusionner : à la fin) |
@@ -101,7 +101,7 @@ python pdftools.py remplacer document.pdf "ancien" "nouveau"
 - **Excel** : chaque tableau trouvé devient une feuille, les nombres « 1 234,56 » deviennent de vrais nombres. Sans tableau, le texte est mis en colonnes dans une feuille « Texte ».
 - **Remplacer** écrit le nouveau texte en Helvetica à la même taille et couleur : la police d'origine n'est pas toujours conservée.
 - **OCR** : vérifiez les chiffres importants (ex. « 3,75 » peut être lu « 9:75 » sur un scan de mauvaise qualité).
-- Pour un scan, lancez l'OCR **avant** de remplacer du texte ou de convertir en Excel/Word.
+- Pour un scan, lancez l'OCR **avant** de remplacer du texte (la conversion en Excel/Word/Texte le lance toute seule).
 
 ## Briques libres utilisées
 
