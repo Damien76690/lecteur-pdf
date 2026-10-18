@@ -257,3 +257,45 @@ test("protéger par mot de passe puis rouvrir", async () => {
   assert.ok(!core.needsPassword(core.protect(facture(), { copy: false })));
   assert.throws(() => core.protect(facture(), { password: "a,b" }), /virgule/);
 });
+
+// ------------------------------------------------------------ compresser, aplatir, images
+
+// Photo de 2400 × 1800 pixels (dégradé bruité) enregistrée en PNG, donc lourde.
+function photoPng(w = 2400, h = 1800) {
+  const pix = new mupdf.Pixmap(mupdf.ColorSpace.DeviceRGB, [0, 0, w, h], false);
+  const px = pix.getPixels();
+  for (let y = 0, k = 0; y < h; y++) for (let x = 0; x < w; x++, k += 3) {
+    const n = (x * 7919 + y * 104729) % 23;
+    px[k] = (x * 255 / w + n) | 0; px[k + 1] = (y * 255 / h + n) | 0; px[k + 2] = 128 + n;
+  }
+  return pix.asPNG();
+}
+
+test("créer un PDF à partir d'images, puis le compresser", async () => {
+  const png = photoPng();
+  assert.equal(core.imageType(png), "png");
+  assert.equal(core.imageType(facture()), null);
+  const pdf = await core.imagesToPdf([png, open(facture()).loadPage(0).toPixmap(mupdf.Matrix.identity, mupdf.ColorSpace.DeviceRGB, false).asJPEG(80)]);
+  const info = core.pageInfo(pdf);
+  assert.deepEqual(info.map(p => [p.w, p.h]), [[842, 595], [595, 842]], "paysage puis portrait");
+  const { bytes, images } = core.compress(pdf, "ecran");
+  assert.ok(images >= 1);
+  assert.ok(bytes.length < pdf.length / 3, `${pdf.length} -> ${bytes.length}`);
+  assert.equal(core.pageInfo(bytes).length, 2);
+  const again = core.compress(facture());
+  assert.equal(again.images, 0);
+  assert.match(text(again.bytes), /Société Dupont/);
+});
+
+test("aplatir : les commentaires deviennent le contenu de la page", () => {
+  const noted = core.annotate(facture(), 0, { kind: "textbox", at: [72, 320], text: "Vu le 3 mars", size: 12 });
+  const flat = core.flatten(noted);
+  assert.equal(core.listAnnotations(flat).length, 0);
+  assert.match(text(flat), /Vu le 3 mars/);
+});
+
+test("exporter une page en image", () => {
+  const png = core.pageImage(open(facture()), 0, { dpi: 72 });
+  assert.equal(core.imageType(png), "png");
+  assert.equal(core.imageType(core.pageImage(open(facture()), 0, { format: "jpeg" })), "jpeg");
+});

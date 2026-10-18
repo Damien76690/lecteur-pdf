@@ -26,7 +26,7 @@ let current = 0;              // page affichée (la plus visible)
 
 function say(text, err) { const m = $("#msg"); m.textContent = text; m.className = err ? "err" : ""; }
 function setButtons(disabled) {
-  $$(".ribbon button, .ribbon input, .ribbon select").forEach(b => b.disabled = disabled || !doc);
+  $$(".ribbon button, .ribbon input, .ribbon select").forEach(b => b.disabled = disabled || (!doc && !b.classList.contains("always")));
   $$("[data-sample], label.btn input").forEach(b => b.disabled = disabled);
   $("#undo").disabled = disabled || !doc || !doc.history.length;
   $("#redo").disabled = disabled || !doc || !doc.future.length;
@@ -191,10 +191,31 @@ function drawTabs() {
   }
 }
 
-async function openFile(file) {
-  if (!file) return;
-  if (!/\.pdf$/i.test(file.name) && file.type !== "application/pdf") return say("Choisissez un fichier PDF.", true);
-  await openBytes(new Uint8Array(await file.arrayBuffer()), file.name.replace(/\.pdf$/i, ""));
+// Ouvre des fichiers choisis ou déposés : chaque PDF dans son onglet ; les images (photos, scans)
+// sont réunies dans un nouveau PDF, une page par image.
+async function openFiles(files) {
+  files = [...files];
+  if (!files.length) return;
+  const read = await Promise.all(files.map(async f => ({ name: f.name, bytes: new Uint8Array(await f.arrayBuffer()) })));
+  const images = read.filter(f => core.imageType(f.bytes)), others = read.filter(f => !core.imageType(f.bytes));
+  for (const f of others) {
+    if (!/\.pdf$/i.test(f.name) && f.bytes[0] !== 0x25) { say(`« ${f.name} » n'est ni un PDF ni une image PNG ou JPEG.`, true); continue; }
+    await openBytes(f.bytes, f.name.replace(/\.pdf$/i, ""));
+  }
+  if (images.length) await openImages(images.map(f => f.bytes), images[0].name.replace(/\.[^.]+$/, ""));
+}
+const openFile = file => file && openFiles([file]);
+
+async function openImages(list, name) {
+  if (!ready) return say("Patientez, le lecteur se charge…");
+  const bytes = await busy("Création du PDF à partir des images…", () => core.imagesToPdf(list));
+  if (bytes) await openBytes(bytes, name);
+}
+
+// Fichier ouvert depuis Windows : un PDF, ou une image transformée en PDF.
+async function openAny(bytes, filename) {
+  if (core.imageType(bytes)) return openImages([bytes], filename.replace(/\.[^.]+$/, ""));
+  return openBytes(bytes, filename.replace(/\.pdf$/i, ""));
 }
 
 // Applique une modification ; `fn` renvoie les nouveaux octets (ou null si rien n'a changé).
@@ -550,6 +571,46 @@ async function protectDoc() {
     return say((password ? "Mot de passe défini" : "Restrictions définies") + " : la protection sera appliquée en enregistrant (Ctrl+S). Notez bien ce mot de passe, il ne pourra pas être retrouvé.");
   }
 }
+
+// ------------------------------------------------------------ optimiser
+
+const size = n => n < 1e6 ? `${Math.max(1, Math.round(n / 1e3))} Ko` : `${(n / 1e6).toFixed(1).replace(".", ",")} Mo`;
+
+async function compressDoc() {
+  const dlg = $("#compress-dlg");
+  $("#compress-size").textContent = `Taille actuelle : ${size(doc.bytes.length)}.`;
+  const ok = await new Promise(done => { dlg.onclose = () => done(dlg.returnValue === "ok"); dlg.returnValue = ""; dlg.showModal(); });
+  if (!ok) return;
+  const level = $("#compress-dlg input[name=level]:checked").value, before = doc.bytes.length;
+  let images = 0, smaller = true;
+  await edit("Compression…", b => {
+    const r = core.compress(b, level);
+    images = r.images;
+    smaller = r.bytes.length < b.length * 0.98;
+    return smaller ? r.bytes : null;
+  }, () => `Taille : ${size(before)} → ${size(doc.bytes.length)} (−${Math.round(100 * (1 - doc.bytes.length / before))} %` +
+           (images ? `, ${plural(images, "image")} allégée${images > 1 ? "s" : ""})` : ")") + ". Enregistrez pour garder cette version.");
+  if (!smaller) say(`Ce PDF est déjà optimisé (${size(before)}) : rien à gagner à ce niveau.`);
+}
+
+function flattenDoc() {
+  if (!doc.annots.length && !doc.fieldList.length) return say("Rien à aplatir : ce document n'a ni commentaire ni champ de formulaire.");
+  if (confirm("Aplatir le document ? Commentaires, tampons, signatures image et champs remplis feront partie de la page : ils ne pourront plus être modifiés (Ctrl+Z pour annuler)."))
+    edit("Aplatissement…", b => core.flatten(b), "Document aplati : tout est fixé dans les pages.");
+}
+
+async function exportImage(format) {
+  const data = core.pageImage(doc.mu, current, { dpi: 150, format });
+  say(await download(data, `${doc.name}-page${current + 1}.${format === "jpeg" ? "jpg" : "png"}`, `image/${format}`));
+}
+
+$("#images-file").onchange = async e => {
+  const files = [...e.target.files];
+  e.target.value = "";
+  const list = await Promise.all(files.map(async f => new Uint8Array(await f.arrayBuffer())));
+  if (list.some(b => !core.imageType(b))) return say("Choisissez des images PNG ou JPEG.", true);
+  if (list.length) openImages(list, files[0].name.replace(/\.[^.]+$/, ""));
+};
 
 // ------------------------------------------------------------ organiser les pages
 
@@ -1013,6 +1074,11 @@ $("#rotate-right").onclick = () => rotate(current, 90);
 $("#delete-page").onclick = () => removePage(current);
 $("#blank-page").onclick = blankPage;
 $("#protect").onclick = protectDoc;
+$("#compress").onclick = compressDoc;
+$("#flatten").onclick = flattenDoc;
+$("#export-png").onclick = () => exportImage("png");
+$("#export-jpg").onclick = () => exportImage("jpeg");
+$("#from-images").onclick = () => $("#images-file").click();
 $("#insert-pdf").onclick = () => pickInsert(false);
 $("#append-pdf").onclick = () => pickInsert(true);
 $("#extract-pages").onclick = extractPages;
@@ -1081,7 +1147,7 @@ $$("[data-side]").forEach(b => b.onclick = () => openSide(b.dataset.side));
 $("#ocr").onclick = () => edit("Reconnaissance du texte…", ocr,
   "Texte reconnu : le PDF est maintenant sélectionnable et convertible. Vérifiez les chiffres importants.");
 $$("[data-dl]").forEach(b => b.onclick = () => save(b.dataset.dl));
-$$("label.btn input[type=file]").forEach(i => i.onchange = e => { openFile(e.target.files[0]); e.target.value = ""; });
+$$("label.btn input[type=file]").forEach(i => i.onchange = e => { openFiles(e.target.files); e.target.value = ""; });
 $$("[data-sample]").forEach(b => b.onclick = async () => {
   const r = await fetch(`exemples/${b.dataset.sample}.pdf`);
   openBytes(new Uint8Array(await r.arrayBuffer()), b.dataset.sample);
@@ -1089,7 +1155,7 @@ $$("[data-sample]").forEach(b => b.onclick = async () => {
 const drop = $("#drop");
 ["dragover", "dragenter"].forEach(t => document.addEventListener(t, e => { e.preventDefault(); drop.classList.add("over"); }));
 document.addEventListener("dragleave", () => drop.classList.remove("over"));
-document.addEventListener("drop", e => { e.preventDefault(); drop.classList.remove("over"); openFile(e.dataTransfer.files[0]); });
+document.addEventListener("drop", e => { e.preventDefault(); drop.classList.remove("over"); openFiles(e.dataTransfer.files); });
 
 // ------------------------------------------------------------ mise à jour (application Windows)
 
@@ -1121,7 +1187,7 @@ window.mimFichiersDemandes = async () => {
     for (const f of await window.pywebview.api.fichiers_demandes()) {   // chacun dans son onglet
       const r = await fetch(f.url);
       if (!r.ok) { say(`Impossible de lire « ${f.nom} ».`, true); continue; }
-      await openBytes(new Uint8Array(await r.arrayBuffer()), f.nom.replace(/\.pdf$/i, ""));
+      await openAny(new Uint8Array(await r.arrayBuffer()), f.nom);
     }
   } catch (e) {
     console.error(e); say("Erreur : " + (e.message || e), true);

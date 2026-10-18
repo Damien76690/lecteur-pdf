@@ -43,9 +43,12 @@ VERROU = "MimPDF"  # l'installateur attend que ce verrou disparaisse (fenêtre f
 
 FILTRES = {
     "pdf": "Document PDF (*.pdf)",
+    "ouvrir": "PDF et images (*.pdf;*.png;*.jpg;*.jpeg)",
     "docx": "Document Word (*.docx)",
     "xlsx": "Classeur Excel (*.xlsx)",
     "txt": "Texte (*.txt)",
+    "png": "Image PNG (*.png)",
+    "jpg": "Image JPEG (*.jpg)",
 }
 
 
@@ -334,7 +337,7 @@ class Api:
         """Fenêtre « Ouvrir » de Windows (plusieurs fichiers possibles)."""
         import webview
         choix = self._window.create_file_dialog(webview.FileDialog.OPEN, allow_multiple=True,
-                                                file_types=(FILTRES["pdf"], "Tous les fichiers (*.*)"))
+                                                file_types=(FILTRES["ouvrir"], FILTRES["pdf"], "Tous les fichiers (*.*)"))
         for chemin in choix or []:
             self.recevoir(chemin)
 

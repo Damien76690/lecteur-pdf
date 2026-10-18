@@ -335,6 +335,95 @@ export function protect(bytes, { password = "", owner = "", print = true, copy =
     `encrypt=aes-256,user-password=${password},owner-password=${owner},permissions=${perms},garbage=compact,compress`).asUint8Array().slice());
 }
 
+// ------------------------------------------------------------ compresser, aplatir, images
+
+// Niveaux de compression : résolution maximale des images (points par pouce) et qualité JPEG.
+export const COMPRESSION = {
+  ecran: { dpi: 96, quality: 55 },
+  standard: { dpi: 150, quality: 72 },
+  haute: { dpi: 220, quality: 85 },
+};
+
+// Réduit le poids du PDF : les grandes images sont réduites et recompressées en JPEG, puis le fichier est
+// réécrit sans les objets inutiles ni doublons. Renvoie { bytes, images } (nombre d'images allégées).
+export function compress(bytes, level = "standard") {
+  const { dpi, quality } = COMPRESSION[level] || level;
+  return withMu(bytes, doc => {
+    let side = 0;
+    for (let i = 0; i < doc.countPages(); i++) {
+      const [x0, y0, x1, y1] = doc.loadPage(i).getBounds();
+      side = Math.max(side, x1 - x0, y1 - y0);
+    }
+    const maxPx = Math.round(side / 72 * dpi);
+    let images = 0;
+    for (let n = 1; n < doc.countObjects(); n++) {
+      const obj = doc.newIndirect(n);   // un flux se lit et s'écrit par sa référence
+      if (!obj.isStream() || obj.get("Subtype").asName?.() !== "Image") continue;
+      if (obj.get("ImageMask").asBoolean?.() || !obj.get("Mask").isNull() || obj.get("BitsPerComponent").asNumber?.() === 1) continue;
+      try { images += shrinkImage(doc, obj, maxPx, quality); } catch (e) { /* image illisible : laissée telle quelle */ }
+    }
+    try { doc.subsetFonts(); } catch {}
+    return { bytes: doc.saveToBuffer("garbage=deduplicate,compress,compress-fonts,compress-images").asUint8Array().slice(), images };
+  });
+  function shrinkImage(doc, obj, maxPx, quality) {
+    const image = doc.loadImage(obj), w = image.getWidth(), h = image.getHeight();
+    const old = obj.readRawStream().length;
+    const k = Math.min(1, maxPx / Math.max(w, h));
+    if (k === 1 && /DCT/.test(String(obj.get("Filter")))) return 0;   // déjà en JPEG à la bonne taille
+    let pix = image.toPixmap();
+    const gray = pix.getNumberOfComponents() - pix.getAlpha() === 1;
+    pix = pix.convertToColorSpace(gray ? mupdf.ColorSpace.DeviceGray : mupdf.ColorSpace.DeviceRGB, false);
+    const nw = Math.max(1, Math.round(w * k)), nh = Math.max(1, Math.round(h * k));
+    if (k < 1) pix = pix.warp([[0, 0], [w, 0], [w, h], [0, h]], nw, nh);
+    const jpeg = pix.asJPEG(quality);
+    if (jpeg.length >= old * 0.9) return 0;
+    obj.writeRawStream(jpeg);
+    obj.put("Filter", doc.newName("DCTDecode"));
+    obj.delete("DecodeParms"); obj.delete("Decode"); obj.delete("Intent");
+    obj.put("Width", nw); obj.put("Height", nh); obj.put("BitsPerComponent", 8);
+    obj.put("ColorSpace", doc.newName(gray ? "DeviceGray" : "DeviceRGB"));
+    return 1;
+  }
+}
+
+// Aplatit le document : commentaires, tampons, signatures image et champs remplis deviennent du contenu
+// de la page (ils ne peuvent plus être déplacés ni modifiés).
+export function flatten(bytes) {
+  return withMu(bytes, doc => { doc.bake(true, true); return saveMu(doc); });
+}
+
+// Image de la page (PNG ou JPEG) à `dpi` points par pouce.
+export function pageImage(doc, index, { dpi = 150, format = "png" } = {}) {
+  const page = doc.loadPage(index);
+  try {
+    const pix = page.toPixmap(mupdf.Matrix.scale(dpi / 72, dpi / 72), mupdf.ColorSpace.DeviceRGB, false, true);
+    pix.setResolution(dpi, dpi);
+    return format === "jpeg" ? pix.asJPEG(90) : pix.asPNG();
+  } finally { page.destroy(); }
+}
+
+// Type d'image reconnu à ses premiers octets (null si ce n'est ni un PNG ni un JPEG).
+export function imageType(bytes) {
+  if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return "png";
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "jpeg";
+  return null;
+}
+
+// Crée un PDF à partir d'images (photos, scans) : une page A4 par image, dans le sens de l'image.
+export async function imagesToPdf(list) {
+  const out = await PDFLib.PDFDocument.create();
+  for (const bytes of list) {
+    const type = imageType(bytes);
+    if (!type) throw new Error("seules les images PNG et JPEG peuvent être converties en PDF");
+    const img = type === "png" ? await out.embedPng(bytes) : await out.embedJpg(bytes);
+    const [W, H] = img.width > img.height ? [842, 595] : [595, 842];
+    const k = Math.min((W - 40) / img.width, (H - 40) / img.height);
+    const w = img.width * k, h = img.height * k;
+    out.addPage([W, H]).drawImage(img, { x: (W - w) / 2, y: (H - h) / 2, width: w, height: h });
+  }
+  return out.save();
+}
+
 // ------------------------------------------------------------ organiser les pages
 
 // « 1-3, 5, 8-fin » -> [0, 1, 2, 4, 7, …] (pages numérotées à partir de 1, dans l'ordre donné).
