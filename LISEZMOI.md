@@ -45,6 +45,10 @@ Les commandes sont rangées dans des onglets, comme dans Word : **Fichier**, **A
 | Ouvrir un PDF protégé par mot de passe | Mim PDF demande le mot de passe ; la copie enregistrée garde la même protection |
 | Protéger un PDF | **Fichier › Protéger** : mot de passe à l'ouverture (chiffrement AES 256 bits) et/ou interdire l'impression, la copie ou les modifications |
 | Convertir | **Convertir** : Word, Excel, Texte ou PDF |
+| Créer un PDF à partir de photos ou de scans | Ouvrez (ou glissez) des images PNG ou JPEG : elles forment un nouveau PDF, une page par image. Ou **Convertir › PDF depuis images** |
+| Enregistrer une page en image | **Convertir › Page en PNG / Page en JPEG** (150 ppp) |
+| Réduire le poids d'un PDF | **Convertir › Compresser** : Écran (e-mail), Standard ou Haute qualité ; la taille avant / après s'affiche |
+| Aplatir (fixer commentaires et champs remplis) | **Convertir › Aplatir** |
 
 **PDF signés électroniquement (Docusign, certificat…)** : un bandeau le signale à l'ouverture. Les commentaires, surlignages, tampons, signatures image et champs de formulaire remplis sont ajoutés à la suite du fichier, sans toucher aux octets signés : la signature d'origine reste valable. Les autres modifications (rotation, suppression de page, texte écrit, OCR…) l'invalident dans la copie : Mim PDF prévient avant d'enregistrer.
 
