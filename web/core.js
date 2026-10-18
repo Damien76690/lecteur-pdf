@@ -804,7 +804,13 @@ export function keepOcrWords(words) {
     for (const o of short) if (!piled.has(o) && [...piled].some(p => Math.abs(p.bbox.x0 - o.bbox.x0) < typical * 0.5
         && Math.max(p.bbox.y0 - o.bbox.y1, o.bbox.y0 - p.bbox.y1) < typical * 8)) { piled.add(o); grew = true; }
   }
-  return sure.filter(w => !piled.has(w) && !(w.text.trim().length <= 3 && w.bbox.y1 - w.bbox.y0 > typical * 1.8))
+  // Petit signe lu sur un mot bien plus grand (accent ou trait de lettre d'un titre) : un débris.
+  const inside = w => {
+    const cx = (w.bbox.x0 + w.bbox.x1) / 2, cy = (w.bbox.y0 + w.bbox.y1) / 2;
+    return w.text.trim().length <= 2 && !LINKS.has(w.text.trim()) && sure.some(o => o !== w && o.bbox.y1 - o.bbox.y0 > Math.max(w.bbox.y1 - w.bbox.y0, typical) * 1.6
+      && o.bbox.x0 <= cx && cx <= o.bbox.x1 && o.bbox.y0 <= cy && cy <= o.bbox.y1);
+  };
+  return sure.filter(w => !piled.has(w) && !inside(w) && !(w.text.trim().length <= 3 && w.bbox.y1 - w.bbox.y0 > typical * 1.8))
     // Capitales grasses collées par l'OCR : « TOTALGENERAL », « RESULTATDE L'EXERCICE ».
     .map(w => ({ ...w, text: w.text.replace(/^(TOTAL|RESULTAT)(?=[A-ZÀ-Ý(])/, "$1 ") }));
 }
@@ -876,6 +882,106 @@ export function mergeNumberReads(words, zones, reads) {
   });
   // Chaque relecture prend la place du premier de ses mots, pour garder l'ordre de lecture.
   return words.flatMap((w, i) => add.has(i) ? [add.get(i)] : drop.has(i) ? [] : [w]);
+}
+
+// Libellés mal lus à la première lecture (« TOTAL (Im », « laméthode », « 1aSans ») : chaque
+// suite de mots d'une ligne est relue seule, en mode ligne. `textZones` donne les rectangles à
+// relire (les suites déjà sûres sont laissées), `mergeTextReads` ne garde une relecture que si
+// elle est sûre et proche de l'original : une relecture plus libre invente plus qu'elle ne corrige.
+export function textZones(words, size) {
+  const items = words.map((w, i) => ({ w, i, t: w.text.trim(), h: w.bbox.y1 - w.bbox.y0, cy: (w.bbox.y0 + w.bbox.y1) / 2 }))
+    .filter(x => x.t).sort((a, b) => a.cy - b.cy);
+  const lines = [];
+  for (const x of items) {
+    const line = lines.find(l => Math.abs(l.cy - x.cy) < Math.min(l.h, x.h) * 0.5);
+    if (line) line.items.push(x); else lines.push({ cy: x.cy, h: x.h, items: [x] });
+  }
+  const zones = [];
+  for (const line of lines) {
+    let run = [];
+    const flush = () => {
+      // Un trou plus large qu'une espace laisse soupçonner un petit mot perdu (« Charges payer »).
+      const gap = run.some((x, k) => k && x.w.bbox.x0 - run[k - 1].w.bbox.x1 > Math.max(x.h, run[k - 1].h) * 0.7);
+      if (run.some(x => /\p{L}/u.test(x.t)) && (gap || run.some(x => x.w.confidence < 95))) zones.push(run);
+      run = [];
+    };
+    for (const x of line.items.sort((a, b) => a.w.bbox.x0 - b.w.bbox.x0)) {
+      const prev = run[run.length - 1];
+      if (digitish(x.t)) { flush(); continue; }
+      if (prev && x.w.bbox.x0 - prev.w.bbox.x1 > Math.max(prev.h, x.h) * 1.2) flush();
+      run.push(x);
+    }
+    flush();
+  }
+  return zones.map(run => {
+    const xs = run.map(x => x.w.bbox), h = Math.max(...run.map(x => x.h));
+    const x0 = Math.min(...xs.map(b => b.x0)), x1 = Math.max(...xs.map(b => b.x1));
+    const y0 = Math.min(...xs.map(b => b.y0)), y1 = Math.max(...xs.map(b => b.y1));
+    const left = Math.max(0, Math.floor(x0 - h * 0.3)), top = Math.max(0, Math.floor(y0 - h * 0.25));
+    const right = Math.min(size?.width ?? Infinity, Math.ceil(x1 + h * 0.3)), bottom = Math.min(size?.height ?? Infinity, Math.ceil(y1 + h * 0.25));
+    return { ids: run.map(x => x.i), bbox: { x0, y0, x1, y1 }, rect: { left, top, width: right - left, height: bottom - top } };
+  });
+}
+
+// Petits mots qu'une première lecture colle à leur voisin (« laméthode », « expriméen »).
+const LINKS = new Set("à a au aux de des du d en et la le les l un une sur par pour plus ou an ans".split(" "));
+const distance = (a, b) => {
+  let row = [...Array(b.length + 1).keys()];
+  for (let i = 1; i <= a.length; i++) {
+    const next = [i];
+    for (let j = 1; j <= b.length; j++) next[j] = Math.min(row[j] + 1, next[j - 1] + 1, row[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    row = next;
+  }
+  return row[b.length];
+};
+
+const plain = t => t.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
+// Un mot sûr de la première lecture ne doit pas disparaître : la relecture peut lui changer un
+// accent ou une lettre en chiffre (« (ébis) » → « (6bis) »), pas lui ôter ou lui changer une lettre.
+const keeps = (t, fresh) => t.length <= 2 || fresh.some(f => plain(f) === plain(t)
+  || (f.length === t.length && [...f].filter((c, i) => c !== t[i]).length === 1 && [...f].every((c, i) => c === t[i] || /\d/.test(c))));
+
+export function mergeTextReads(words, zones, reads) {
+  const drop = new Set(), add = new Map();
+  zones.forEach((z, k) => {
+    const read = reads[k] || {}, sure = read.confidence ?? 0;
+    const old = z.ids.map(i => words[i]), oldT = old.map(w => w.text.trim()), kept = oldT.join(" ").replace(/\s+/g, " ").trim();
+    // Crochets et guillemets isolés ajoutés par la relecture : des bords de case.
+    const fresh = (read.words || []).map(w => ({ ...w, text: w.text.trim().replace(/^\{/, "(").replace(/\}$/, ")") }))
+      .filter(w => w.text && !(/^([|¦!\[\](){}]+|[.…_·‘’“”"]+)$/.test(w.text) && !oldT.includes(w.text)));
+    const text = (read.words ? fresh.map(w => w.text).join(" ") : (read.text || "").trim()).replace(/\s+/g, " ");
+    const mean = old.reduce((n, w) => n + w.confidence, 0) / old.length;
+    let ok;
+    if (!(read.text || "").trim()) ok = sure === 0 && mean < 40; // Tache prise pour du texte : la relecture n'y voit rien.
+    else if (!text || text === kept || kept.length <= 3) ok = false; // Codes de cases (« CJ », « 1A ») : trop courts pour trancher.
+    else if (text.replace(/ /g, "") === kept.replace(/ /g, "")) {
+      // Seules les espaces changent : on sépare un petit mot collé, on recolle un mot coupé en morceaux.
+      const a = kept.split(" "), b = text.split(" "), added = b.filter(t => !a.includes(t));
+      ok = b.length > a.length ? added.some(t => LINKS.has(t.toLowerCase())) && added.every(t => t.length > 3 || LINKS.has(t.toLowerCase()))
+        : a.filter(t => !b.includes(t)).every(t => !LINKS.has(t.toLowerCase()));
+    } else {
+      const now = text.split(" "), changed = fresh.filter(w => !oldT.includes(w.text));
+      const marks = t => (t.normalize("NFD").match(/\p{M}/gu) || []).length;
+      ok = sure >= 85 && changed.every(w => w.confidence >= 80) && marks(text) >= marks(kept)
+        && old.every(w => w.confidence < 85 || keeps(w.text.trim(), now))
+        // Relecture bien plus sûre qu'une première lecture confuse (« tanaupus » → « 1 an au plus »).
+        && ((sure >= 90 && sure >= mean + 15)
+          || (sure >= mean - 10 && distance(kept, text) <= Math.max(kept.length, text.length) * 0.25));
+    }
+    if (!ok) return;
+    z.ids.forEach(i => drop.add(i));
+    // Un mot de la zone rangé sur une autre ligne (« à » un peu plus bas) a été relu avec elle.
+    if (text.split(" ").length !== old.length) words.forEach((w, i) => {
+      const cx = (w.bbox.x0 + w.bbox.x1) / 2, cy = (w.bbox.y0 + w.bbox.y1) / 2;
+      if (!digitish(w.text.trim()) && cx > z.bbox.x0 && cx < z.bbox.x1 && cy > z.bbox.y0 && cy < z.bbox.y1) drop.add(i);
+    });
+    const first = Math.min(...z.ids);
+    // Les cadres des mots relus en mode ligne sont moins justes : on garde ceux de la première lecture.
+    const now = text ? text.split(" ") : [];
+    add.set(first, now.length === old.length ? old.map((w, i) => ({ ...w, text: now[i], confidence: Math.max(w.confidence, sure, 21) }))
+      : now.length ? [{ ...words[first], text, confidence: Math.max(sure, 21), bbox: z.bbox }] : []);
+  });
+  return words.flatMap((w, i) => add.has(i) ? add.get(i) : drop.has(i) ? [] : [w]);
 }
 
 // Ajoute une couche de texte invisible à partir des mots reconnus par l'OCR :
@@ -1093,11 +1199,34 @@ export function extractRows(bytes) {
 // (restes de traits, de trames ou de textes verticaux de la marge lus par l'OCR).
 const isDebris = t => {
   const letters = (t.match(/\p{L}/gu) || []).length;
-  return !/\p{N}/u.test(t) && t !== "à" && (letters < 2 || (letters === 2 && t.length <= 3 && !/^[A-Z]{2}$/.test(t.replace(/\W/g, ""))));
+  return !/\p{N}/u.test(t) && !LINKS.has(t) && (letters < 2 || (letters === 2 && t.length <= 3 && !/^[A-Z]{2}$/.test(t.replace(/\W/g, ""))));
 };
 const isAmount = t => typeof toNumber(t) === "number";
 // « 250 » suivi de « 190 » : un même montant écrit avec une espace entre les milliers.
 const continuesAmount = (a, b) => /^[-+(]?\d{1,3}( \d{3})*$/.test(a) && /^\d{3}([.,]\d+)?\)?$/.test(b);
+
+// Confusions de l'OCR propres aux liasses fiscales et annexes : chiffres romains des totaux
+// (« TOTAL (Im » pour « TOTAL (II) »), durées (« plus de Sans » pour « plus de 5 ans »).
+export function fixOcrLabel(t) {
+  return t
+    .replace(/\((?:[1lI] ?[aà]|l[aà]) ([IVX]+)(D?)\)/g, (m, r, d) => `(I à ${r}${d && "I"})`)
+    .replace(/\b(TOTAL \()([IVX]*)(?:D|m)(?=\s|$)/g, "$1$2I)")
+    .replace(/\b(TOTAL \()([IVX]+)p(?=\s|$)/g, "$1$2)")
+    .replace(/\bTOTAL \(\)/g, "TOTAL (I)")
+    .replace(/(^|\s)[aà] ?[l1] ?an ?au ?plus\b/g, "$1à 1 an au plus")
+    .replace(/\b1 ?[aà] ?[S5] ?ans\b/g, "1 à 5 ans")
+    .replace(/\bentre ?[l1] ?et ?[S5] ?ans\b/g, "entre 1 et 5 ans")
+    .replace(/(^|\s)[aà] ?plus ?de ?[S5] ?ans\b/g, "$1à plus de 5 ans")
+    .replace(/\bplus ?de ?[S5] ?ans\b/g, "plus de 5 ans")
+    .replace(/\bR[éèe]a[lt]ement\b/g, "Règlement")
+    .replace(/^\([ée]?(bis|ter)\)$/, "(6$1)")
+    .replace(/\(article [s5]3 ?[aA]\b/, "(article 53 A")
+    .replace(/\(([IVX]+) ([A-Z]{2})$/, "($1) $2")
+    // Lettres que l'OCR confond (« rn » / « m », « ti » / « b ») dans les mots des notices.
+    .replace(/\bconcemant\b/g, "concernant").replace(/\b(?:nonce|nobce|nobice) n°/g, "notice n°")
+    .replace(/\bexplicat[bo]ns\b/g, "explications").replace(/\bcelte\b/g, "cette").replace(/\bCodc\b/g, "Code")
+    .replace(/\baffrentes\b/g, "afférentes").replace(/\bficultatives\b/g, "facultatives");
+}
 
 function layoutRows(lines) {
   const items = lines.map(l => ({ x: l.x, end: l.bbox.x + l.bbox.w, y: l.y, text: l.text.trim(), size: l.size, bold: l.bold }))
@@ -1116,7 +1245,8 @@ function layoutRows(lines) {
       const prev = acc[acc.length - 1];
       const gap = prev ? c.x - prev.end : Infinity, size = prev ? Math.max(prev.size, c.size) : 0;
       if (prev && (gap < size * 0.6 || (gap < size * 1.2 && continuesAmount(prev.text, c.text)))) {
-        prev.text = prev.text + (gap > size * 0.1 ? " " : "") + c.text; prev.end = Math.max(prev.end, c.end);
+        // Un écart négatif est un texte posé au-dessus (titre de colonne sur deux lignes) : on garde l'espace.
+        prev.text = prev.text + (gap > size * 0.1 || gap < -size * 0.3 ? " " : "") + c.text; prev.end = Math.max(prev.end, c.end);
       } else acc.push(c);
       return acc;
     }, []);
@@ -1130,7 +1260,9 @@ function layoutRows(lines) {
   // Ligne de texte justifiée (espaces élargies) : une seule cellule, pas une case par mot.
   for (const r of rows) {
     const cs = r.cells;
-    if (cs.length >= 3 && !cs.some(c => isAmount(c.text))
+    // (Une phrase peut porter une date ou un nombre : « clos le 31 décembre 2025 ».)
+    const words = cs.filter(c => !isAmount(c.text)).length;
+    if (cs.length >= 3 && (words === cs.length || (cs.length >= 6 && words >= cs.length * 0.75))
         && cs.every((c, i) => !i || c.x - cs[i - 1].end < Math.max(c.size, cs[i - 1].size) * 2.5))
       r.cells = [{ ...cs[0], text: cs.map(c => c.text).join(" "), end: cs[cs.length - 1].end }];
   }
@@ -1138,7 +1270,16 @@ function layoutRows(lines) {
   rows = rows.filter(r => !(r.cells.length === 1 && !isAmount(r.cells[0].text)
     && r.cells[0].text.replace(/\s/g, "").length <= 3 && (r.cells[0].text.match(/\p{L}/gu) || []).length < 2));
   // Renvoi en chiffres romains lu « (1 à VI) » ou « (là V) » : « (I à VI) ».
-  for (const r of rows) for (const c of r.cells) c.text = c.text.replace(/\((?:[1lI] à|là) ([IVX]+)\)/g, "(I à $1)");
+  for (const r of rows) for (const c of r.cells) if (!isAmount(c.text)) c.text = fixOcrLabel(c.text);
+  // Année du formulaire séparée de son numéro (« DGFiP N° 2051 » / « 2025 ») : un seul titre.
+  for (const r of rows) r.cells = r.cells.reduce((acc, c) => {
+    const prev = acc[acc.length - 1];
+    if (prev && /N° ?\d{4}$/.test(prev.text) && /^(19|20)\d\d$/.test(c.text)) { prev.text += " " + c.text; prev.end = c.end; }
+    else acc.push(c);
+    return acc;
+  }, []);
+  // Bords d'une case de date (« ⌊31122025⌋ ») lus comme des « 1 » à côté de la date.
+  for (const r of rows) if (r.cells.some(c => /^\d{2}\/\d{2}\/\d{4}$/.test(c.text))) r.cells = r.cells.filter(c => !/^[1I|]$/.test(c.text));
   // Chiffre mal lu par l'OCR en tête d'un montant : « S 751 781 » -> « 5 751 781 ».
   for (const r of rows) for (const c of r.cells)
     if (/^[SsOolI|]( \d{3})+([.,]\d+)?$/.test(c.text)) c.text = ({ S: "5", s: "5", O: "0", o: "0" }[c.text[0]] ?? "1") + c.text.slice(1);
@@ -1216,16 +1357,25 @@ function layoutRows(lines) {
   const rowsOf = col => new Set(out.flatMap((r, i) => r.cells.some(c => c.col === col) ? [i] : []));
   const width = Math.max(0, ...out.flatMap(r => r.cells.map(c => c.col + 1)));
   const map = [], groups = [];
+  // Le bandeau du haut de page (« Page : 23 ») n'empêche pas un titre de rejoindre ses montants.
+  const banner = out.findIndex(r => r.cells.length > 1);
   for (let k = 0; k < width; k++) {
     const { kind, pos } = cols[Math.min(k, cols.length - 1)] ?? {}, mine = rowsOf(k), g = groups[groups.length - 1];
     const above = g && g.kind === "x" && kind === "end" && pos - g.pos < 100;
-    if (g && (g.kind === kind || above) && ![...mine].some(i => g.lines.has(i))) {
+    if (g && (g.kind === kind || above) && ![...mine].some(i => g.lines.has(i) && !(above && i === banner && mine.size > 2))) {
       mine.forEach(i => g.lines.add(i));
       Object.assign(g, { kind, pos });
     } else groups.push({ kind, pos, lines: mine });
     map[k] = groups.length - 1;
   }
-  for (const r of out) for (const c of r.cells) c.col = map[c.col];
+  for (const r of out) {
+    for (const c of r.cells) c.col = map[c.col];
+    r.cells = r.cells.reduce((acc, c) => {
+      const prev = acc[acc.length - 1];
+      if (prev && prev.col === c.col) prev.text += " " + c.text; else acc.push(c);
+      return acc;
+    }, []);
+  }
   return out;
 }
 
