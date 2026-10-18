@@ -77,6 +77,64 @@ export function needsOcr(pages) {
   return pages.length > 0 && pages.every(p => !p.hasText);
 }
 
+// Image d'une page préparée pour la reconnaissance du texte (OCR), en PNG : noir et blanc
+// (seuil d'Otsu après un léger lissage qui efface les trames grises) et sans les traits
+// des tableaux, qui empêchent sinon l'OCR de lire les chiffres des cases.
+export function renderForOcr(doc, index, zoom) {
+  const page = doc.loadPage(index);
+  const pix = page.toPixmap(mupdf.Matrix.scale(zoom, zoom), mupdf.ColorSpace.DeviceGray, false, true);
+  page.destroy();
+  const w = pix.getWidth(), h = pix.getHeight(), stride = pix.getStride(), px = pix.getPixels();
+  // Moyenne 3×3 (image intégrale).
+  const I = new Float64Array((w + 1) * (h + 1));
+  for (let y = 0; y < h; y++) {
+    let s = 0;
+    for (let x = 0; x < w; x++) { s += px[y * stride + x]; I[(y + 1) * (w + 1) + x + 1] = I[y * (w + 1) + x + 1] + s; }
+  }
+  const g = new Uint8Array(w * h), hist = new Float64Array(256);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const x0 = Math.max(0, x - 1), x1 = Math.min(w, x + 2), y0 = Math.max(0, y - 1), y1 = Math.min(h, y + 2);
+    const v = (I[y1 * (w + 1) + x1] - I[y0 * (w + 1) + x1] - I[y1 * (w + 1) + x0] + I[y0 * (w + 1) + x0]) / ((x1 - x0) * (y1 - y0));
+    g[y * w + x] = v;
+    hist[g[y * w + x]]++;
+  }
+  // Seuil d'Otsu, borné pour les pages presque vides.
+  let sum = 0, wB = 0, sB = 0, best = -1, thr = 160;
+  for (let t = 0; t < 256; t++) sum += t * hist[t];
+  for (let t = 0; t < 255; t++) {
+    wB += hist[t]; sB += t * hist[t];
+    const wF = w * h - wB;
+    if (!wB || !wF) continue;
+    const v = wB * wF * (sB / wB - (sum - sB) / wF) ** 2;
+    if (v > best) { best = v; thr = t + 1; }
+  }
+  thr = Math.min(Math.max(thr, 100), 200);
+  const dark = new Uint8Array(w * h);
+  for (let i = 0; i < w * h; i++) dark[i] = g[i] < thr ? 1 : 0;
+  const out = dark.map(d => d ? 0 : 255);
+  // Traits : segments sombres d'au moins 30 pt (horizontaux) ou 22 pt (verticaux), petits trous
+  // tolérés ; effacés avec un pixel de bord de chaque côté.
+  const gap = Math.round(zoom), minH = Math.round(zoom * 30), minV = Math.round(zoom * 22);
+  const runs = (n, len, at) => {
+    const res = [];
+    let s = -1, last = -1;
+    for (let i = 0; i < n; i++) if (at(i)) {
+      if (s < 0 || i - last > gap + 1) { if (s >= 0 && last - s + 1 >= len) res.push([s, last]); s = i; }
+      last = i;
+    }
+    if (s >= 0 && last - s + 1 >= len) res.push([s, last]);
+    return res;
+  };
+  for (let y = 0; y < h; y++) for (const [a, b] of runs(w, minH, x => dark[y * w + x]))
+    for (let x = a; x <= b; x++) for (let d = -1; d <= 1; d++) if (y + d >= 0 && y + d < h) out[(y + d) * w + x] = 255;
+  for (let x = 0; x < w; x++) for (const [a, b] of runs(h, minV, y => dark[y * w + x]))
+    for (let y = a; y <= b; y++) for (let d = -1; d <= 1; d++) if (x + d >= 0 && x + d < w) out[y * w + x + d] = 255;
+  for (let y = 0; y < h; y++) px.set(out.subarray(y * w, (y + 1) * w), y * stride);
+  const png = pix.asPNG().slice();
+  pix.destroy();
+  return png;
+}
+
 // Rendu d'une page en PNG ; `zoom` = pixels par point.
 export function renderPage(doc, index, zoom) {
   const page = doc.loadPage(index);
@@ -721,6 +779,15 @@ export function watermark(bytes, text, { color = "#9ca3af", opacity = 0.3, size 
   }), { size: s, color, opacity, bold: true });
 }
 
+// Mots de l'OCR à garder : assez sûrs, et pas ces signes très hauts et étroits que donne
+// un texte vertical de la marge (« ACTIF IMMOBILISÉ » couché le long d'un tableau).
+export function keepOcrWords(words) {
+  const sure = words.filter(w => w.confidence > 20 && w.text.trim());
+  const heights = sure.filter(w => w.text.trim().length >= 3).map(w => w.bbox.y1 - w.bbox.y0).sort((a, b) => a - b);
+  const typical = heights[Math.floor(heights.length / 2)] || Infinity;
+  return sure.filter(w => !(w.text.trim().length <= 3 && w.bbox.y1 - w.bbox.y0 > typical * 1.8));
+}
+
 // Ajoute une couche de texte invisible à partir des mots reconnus par l'OCR :
 // la page garde son aspect mais devient sélectionnable, modifiable et convertible.
 // `pages` = [{ index, zoom, words: [{ text, bbox: {x0,y0,x1,y1}, baseline?: {y0,y1} }] }]
@@ -884,6 +951,38 @@ function textLines(page) {
   return lines;
 }
 
+// Morceaux de texte de la page : une ligne horizontale est coupée là où l'écart entre deux
+// caractères dépasse ~0,6 fois la taille du texte (case de tableau voisine, mot isolé…).
+// Une ligne inclinée ou verticale reste d'un seul tenant.
+function textChunks(page) {
+  const st = page.toStructuredText("preserve-whitespace");
+  const chunks = [];
+  let cur = null, last = null, flat = true;
+  const close = () => {
+    if (cur && cur.text.trim()) chunks.push(cur);
+    cur = null; last = null;
+  };
+  st.walk({
+    beginLine(bbox, wmode, dir) { close(); flat = Math.abs(dir[1]) < 0.5; },
+    onChar(c, origin, font, size, quad) {
+      const x0 = Math.min(quad[0], quad[4]), x1 = Math.max(quad[2], quad[6]);
+      const y0 = Math.min(quad[1], quad[3]), y1 = Math.max(quad[5], quad[7]);
+      if (!c.trim()) { if (cur) cur.text += c; return; }
+      if (flat && cur && last !== null && x0 - last > Math.max(cur.size, size) * 0.6) close();
+      if (!cur) cur = { x: x0, y: origin[1], text: "", size, bold: font.isBold(), bbox: { x: x0, y: y0, w: 0, h: 0 }, top: y0, bottom: y1 };
+      cur.text += c;
+      cur.size = Math.max(cur.size, size);
+      cur.top = Math.min(cur.top, y0); cur.bottom = Math.max(cur.bottom, y1);
+      if (flat) cur.bbox.w = Math.max(cur.bbox.w, x1 - cur.x);
+      last = x1;
+    },
+    endLine: close,
+  });
+  close();
+  st.destroy();
+  return chunks;
+}
+
 // Regroupe le texte de chaque page en lignes visuelles composées de cellules
 // (un tableau donne une cellule par case), avec des colonnes alignées.
 // Renvoie [[{ cells: [{ col, text, size, bold }] }]] (une liste de lignes par page).
@@ -892,64 +991,153 @@ export function extractRows(bytes) {
     const pages = [];
     for (let i = 0; i < doc.countPages(); i++) {
       const page = doc.loadPage(i);
-      pages.push(layoutRows(textLines(page)));
+      pages.push(layoutRows(textChunks(page)));
       page.destroy();
     }
     return pages;
   });
 }
 
+// Débris : ni chiffre, ni mot de plus de deux lettres, hors codes en capitales comme « AB »
+// (restes de traits, de trames ou de textes verticaux de la marge lus par l'OCR).
+const isDebris = t => {
+  const letters = (t.match(/\p{L}/gu) || []).length;
+  return !/\p{N}/u.test(t) && (letters < 2 || (letters === 2 && t.length <= 3 && !/^[A-Z]{2}$/.test(t.replace(/\W/g, ""))));
+};
+const isAmount = t => typeof toNumber(t) === "number";
+// « 250 » suivi de « 190 » : un même montant écrit avec une espace entre les milliers.
+const continuesAmount = (a, b) => /^[-+(]?\d{1,3}( \d{3})*$/.test(a) && /^\d{3}([.,]\d+)?\)?$/.test(b);
+
 function layoutRows(lines) {
-  lines.sort((a, b) => a.y - b.y || a.x - b.x);
-  const rows = [];
-  for (const l of lines) {
-    const cell = { x: l.x, end: l.bbox.x + l.bbox.w, text: l.text, size: l.font.size,
-                   bold: l.font.weight === "bold" };
-    const row = rows.find(r => Math.abs(r.y - l.y) < Math.max(r.size, cell.size) * 0.45);
-    if (row) row.cells.push(cell); else rows.push({ y: l.y, size: cell.size, cells: [cell] });
+  const items = lines.map(l => ({ x: l.x, end: l.bbox.x + l.bbox.w, y: l.y, text: l.text.trim(), size: l.size, bold: l.bold }))
+    .filter(c => !isDebris(c.text));
+  items.sort((a, b) => a.y - b.y || a.x - b.x);
+  let rows = [];
+  for (const cell of items) {
+    const row = rows.find(r => Math.abs(r.y - cell.y) < Math.max(r.size, cell.size) * 0.5);
+    if (row) row.cells.push(cell); else rows.push({ y: cell.y, size: cell.size, cells: [cell] });
   }
   rows.sort((a, b) => a.y - b.y);
   for (const r of rows) {
     r.cells.sort((a, b) => a.x - b.x);
-    // Mots trop proches (souvent l'OCR) : même cellule.
+    // Morceaux trop proches, ou suite d'un montant : même cellule.
     r.cells = r.cells.reduce((acc, c) => {
       const prev = acc[acc.length - 1];
-      if (prev && c.x - prev.end < Math.max(prev.size, c.size) * 0.9) {
-        const gap = /\s$/.test(prev.text) || /^\s/.test(c.text) || c.x - prev.end > prev.size * 0.15;
-        prev.text = prev.text.trimEnd() + (gap ? " " : "") + c.text.trimStart(); prev.end = Math.max(prev.end, c.end);
+      const gap = prev ? c.x - prev.end : Infinity, size = prev ? Math.max(prev.size, c.size) : 0;
+      if (prev && (gap < size * 0.6 || (gap < size * 1.2 && continuesAmount(prev.text, c.text)))) {
+        prev.text = prev.text + (gap > size * 0.1 ? " " : "") + c.text; prev.end = Math.max(prev.end, c.end);
       } else acc.push(c);
       return acc;
     }, []);
-    for (const c of r.cells) c.text = c.text.trim();
   }
-  // Colonnes : positions de départ des cellules des lignes à plusieurs cases.
-  const xs = rows.filter(r => r.cells.length > 1).flatMap(r => r.cells.map(c => c.x)).sort((a, b) => a - b);
-  const anchors = [];
-  for (const x of xs) {
-    const last = anchors[anchors.length - 1];
-    if (last && x - last.max < 15) { last.max = x; last.sum += x; last.n++; } else anchors.push({ max: x, sum: x, n: 1 });
+  // Marque isolée en tête de ligne, loin du libellé qui suit (numéro de marge, puce lue par l'OCR…).
+  for (const r of rows) {
+    const [a, b] = r.cells;
+    if (b && a.text.replace(/\s/g, "").length <= 2 && (b.text.match(/\p{L}/gu) || []).length >= 3
+        && b.x - a.end > Math.max(a.size, b.size) * 0.8) r.cells.shift();
   }
-  const cols = anchors.map(a => a.sum / a.n);
-  return rows.map(r => {
+  // Ligne de texte justifiée (espaces élargies) : une seule cellule, pas une case par mot.
+  for (const r of rows) {
+    const cs = r.cells;
+    if (cs.length >= 3 && !cs.some(c => isAmount(c.text))
+        && cs.every((c, i) => !i || c.x - cs[i - 1].end < Math.max(c.size, cs[i - 1].size) * 2.5))
+      r.cells = [{ ...cs[0], text: cs.map(c => c.text).join(" "), end: cs[cs.length - 1].end }];
+  }
+  // Chiffre mal lu par l'OCR en tête d'un montant : « S 751 781 » -> « 5 751 781 ».
+  for (const r of rows) for (const c of r.cells)
+    if (/^[SsOolI|]( \d{3})+([.,]\d+)?$/.test(c.text)) c.text = ({ S: "5", s: "5", O: "0", o: "0" }[c.text[0]] ?? "1") + c.text.slice(1);
+  // Ligne de montants, éventuellement précédés d'une marque de quelques signes (« æ3 ») qu'on laisse tomber.
+  const scrap = c => !isAmount(c.text) && c.text.length <= 3 && !/^[A-Z0-9]{2}$/.test(c.text);
+  const amounts = r => r.cells.some(c => isAmount(c.text)) && r.cells.every(c => isAmount(c.text) || scrap(c));
+  // Montants centrés entre les deux lignes d'un libellé : rattachés à la ligne de texte la plus proche.
+  rows = rows.filter((r, i) => {
+    if (!amounts(r)) return true;
+    r = { ...r, cells: r.cells.filter(c => isAmount(c.text)) };
+    const near = [rows[i - 1], rows[i + 1]].filter(o => o && !amounts(o) && Math.abs(o.y - r.y) < Math.max(o.size, r.size) * 1.3
+      && !o.cells.some(a => r.cells.some(b => a.x < b.end && b.x < a.end)))
+      .sort((a, b) => Math.abs(a.y - r.y) - Math.abs(b.y - r.y));
+    if (!near.length) return true;
+    near[0].cells.push(...r.cells); near[0].cells.sort((a, b) => a.x - b.x);
+    return false;
+  });
+  // Libellé sur deux lignes (« Avances et acomptes sur immobilisa- » / « tions incorporelles ») : une seule
+  // cellule, sur la ligne qui porte les montants s'ils sont tombés avec la seconde moitié.
+  rows = rows.reduce((acc, r) => {
+    const prev = acc[acc.length - 1], c = r.cells[0], p = prev?.cells[0];
+    const joins = prev && (r.cells.length === 1 || prev.cells.length === 1) && /^\p{Ll}/u.test(c.text)
+      && !isAmount(p.text) && Math.abs(p.x - c.x) <= p.size * 1.5 && r.y - prev.y <= Math.max(p.size, c.size) * 1.6;
+    if (!joins) { acc.push(r); return acc; }
+    const text = /-$/.test(p.text) ? p.text.slice(0, -1) + c.text : p.text + " " + c.text;
+    if (r.cells.length === 1) { p.text = text; p.end = Math.max(p.end, c.end); }
+    else { Object.assign(c, { text, x: p.x, end: Math.max(p.end, c.end) }); acc[acc.length - 1] = r; }
+    return acc;
+  }, []);
+  // Colonnes : début des textes, fin des montants alignés à droite (un montant qui commence
+  // pile sous le début d'une colonne de texte est aligné à gauche, comme dans la plupart des factures).
+  const multi = rows.filter(r => r.cells.length > 1);
+  const cluster = (kind, xs) => {
+    const out = []; let group = null;
+    for (const x of xs.sort((a, b) => a - b)) {
+      if (group && x - group.max < 15) { group.max = x; group.sum += x; group.n++; }
+      else out.push(group = { kind, max: x, sum: x, n: 1 });
+    }
+    for (const g of out) g.pos = g.sum / g.n;
+    return out;
+  };
+  // Un montant est aligné du côté qu'il partage avec le plus de montants voisins (égalité : à droite,
+  // sauf s'il commence sous une colonne de texte, comme « Quantité » / « 10 » dans une facture).
+  const textCols = cluster("x", multi.flatMap(r => r.cells.filter(c => !isAmount(c.text)).map(c => c.x)));
+  const nums = multi.flatMap(r => r.cells.filter(c => isAmount(c.text)));
+  const share = (c, k) => nums.filter(o => Math.abs(o[k] - c[k]) < 4).length;
+  const anchor = c => {
+    if (!isAmount(c.text)) return { kind: "x", pos: c.x };
+    const left = share(c, "x"), right = share(c, "end");
+    return left > right || (left === right && textCols.some(k => Math.abs(k.pos - c.x) < 6))
+      ? { kind: "x", pos: c.x } : { kind: "end", pos: c.end };
+  };
+  const cols = [...cluster("x", multi.flatMap(r => r.cells.map(anchor).filter(a => a.kind === "x").map(a => a.pos))),
+                ...cluster("end", multi.flatMap(r => r.cells.map(anchor).filter(a => a.kind === "end").map(a => a.pos)))];
+  cols.sort((a, b) => a.pos - b.pos);
+  const out = rows.map(r => {
     let next = 0;
     return {
       cells: r.cells.map(c => {
-        let col = 0, best = Infinity;
-        cols.forEach((x, k) => { if (k >= next && Math.abs(x - c.x) < best) { best = Math.abs(x - c.x); col = k; } });
-        if (!cols.length || col < next) col = next;
+        const a = anchor(c);
+        let col = -1, best = Infinity;
+        cols.forEach((k, i) => {
+          const d = Math.abs(k.pos - a.pos) + (k.kind === a.kind ? 0 : 1000);
+          if (i >= next && d < best) { best = d; col = i; }
+        });
+        if (col < next) col = next;
         next = col + 1;
         return { col, text: c.text, size: c.size, bold: c.bold };
       }),
     };
   });
+  // Colonnes voisines de même nature qui ne se croisent sur aucune ligne : une seule colonne
+  // (les libellés d'un formulaire, plus ou moins en retrait, restent ainsi dans la première).
+  const rowsOf = col => new Set(out.flatMap((r, i) => r.cells.some(c => c.col === col) ? [i] : []));
+  const width = Math.max(0, ...out.flatMap(r => r.cells.map(c => c.col + 1)));
+  const map = [], groups = [];
+  for (let k = 0; k < width; k++) {
+    const kind = cols[Math.min(k, cols.length - 1)]?.kind, mine = rowsOf(k), g = groups[groups.length - 1];
+    if (g && g.kind === kind && ![...mine].some(i => g.lines.has(i))) mine.forEach(i => g.lines.add(i));
+    else groups.push({ kind, lines: mine });
+    map[k] = groups.length - 1;
+  }
+  for (const r of out) for (const c of r.cells) c.col = map[c.col];
+  return out;
 }
 
 // « 1 234,56 € » -> 1234.56 ; renvoie le texte tel quel si ce n'est pas un nombre.
 export function toNumber(text) {
   let t = text.replace(/[\s\u00a0\u202f€$£]/g, "");
-  if (/^[-+]?\d{1,3}(\.\d{3})+,\d+$/.test(t)) t = t.replace(/\./g, "");
-  if (!/^[-+]?\d+([.,]\d+)?$/.test(t) || /^[-+]?0\d/.test(t)) return text;
-  return parseFloat(t.replace(",", "."));
+  // (1 234) : montant négatif, à la manière des comptables ; « (1) » reste un renvoi.
+  const neg = /^\((\d{3,}|\d.*[.,].*)\)$/.test(t);
+  if (neg) t = t.slice(1, -1);
+  if (/^[-+]?\d{1,3}(\.\d{3})+(,\d+)?$/.test(t)) t = t.replace(/\./g, "");  // 1.234.567,89 ou 41.016
+  if (!/^[-+]?\d+([.,]\d+)?$/.test(t) || /^[-+]?0\d/.test(t) || (neg && /^[-+]/.test(t))) return text;
+  return (neg ? -1 : 1) * parseFloat(t.replace(",", "."));
 }
 
 const rowToArray = row => {
@@ -968,6 +1156,8 @@ export function toXlsx(XLSX, pages) {
   pages.forEach((rows, i) => {
     const data = rows.map(r => rowToArray(r).map(toNumber));
     const ws = XLSX.utils.aoa_to_sheet(data.length ? data : [[""]]);
+    // Montants affichés avec séparateur des milliers (1 234 567 ou 1 234,50 selon la langue d'Excel).
+    for (const ref of Object.keys(ws)) if (ws[ref]?.t === "n") ws[ref].z = Number.isInteger(ws[ref].v) ? "#,##0" : "#,##0.00";
     const width = Math.max(1, ...data.map(r => r.length));
     ws["!cols"] = Array.from({ length: width }, (_, k) =>
       ({ wch: Math.min(60, Math.max(8, ...data.map(r => String(r[k] ?? "").length + 2))) }));

@@ -46,6 +46,61 @@ test("Excel : tableau en colonnes et vrais nombres", () => {
   assert.deepEqual(rows[3], ["Papier A4", 10, 4.5, 45]);
 });
 
+// Formulaire de type bilan : montants alignés à droite avec espaces des milliers,
+// libellé sur deux lignes, cadre du tableau tracé en traits.
+async function bilan() {
+  const d = await PDFLib.PDFDocument.create();
+  const font = await d.embedFont(PDFLib.StandardFonts.TimesRoman);
+  const page = d.addPage([595, 842]);
+  const put = (t, x, y, size = 9) => page.drawText(t, { x, y, size, font });
+  const right = (t, end, y) => put(t, end - font.widthOfTextAtSize(t, 9), y);
+  put("Brut", 300, 760); put("Net", 420, 760); put("Net N-1", 500, 760);
+  const lines = [["Concessions, brevets et droits similaires", "AF", "6 900", "4 558", "(5 095)"],
+                 ["Autres immobilisations incorporelles", "AJ", "69 583", "69 583", "41 016"],
+                 ["Disponibilités (1)", "CF", "735 694", "735 694", "566 409"]];
+  lines.forEach(([label, code, ...v], i) => {
+    const y = 730 - i * 22;
+    put(label, 40, y); put(code, 250, y);
+    right(v[0], 340, y); right(v[1], 460, y); right(v[2], 560, y);
+  });
+  put("Installations techniques, matériel", 40, 668); put("et outillage industriels", 40, 659);
+  put("AR", 250, 663); right("250 190", 340, 663); right("24 519", 460, 663); right("50 647", 560, 663);
+  for (let y = 650; y <= 775; y += 22) page.drawLine({ start: { x: 30, y }, end: { x: 570, y }, thickness: 1 });
+  return d.save();
+}
+
+test("Excel : bilan avec montants alignés à droite et libellé sur deux lignes", async () => {
+  const wb = XLSX.read(core.toXlsx(XLSX, core.extractRows(await bilan())), { cellNF: true });
+  const rows = XLSX.utils.sheet_to_json(wb.Sheets["Page 1"], { header: 1 }).map(r => Array.from(r, v => v ?? ""));
+  assert.deepEqual(rows[0].filter(Boolean), ["Brut", "Net", "Net N-1"]);
+  const row = label => rows.find(r => r[0].startsWith(label));
+  assert.deepEqual(row("Concessions").filter(v => v !== ""), ["Concessions, brevets et droits similaires", "AF", 6900, 4558, -5095]);
+  assert.deepEqual(row("Disponibilités").filter(v => v !== ""), ["Disponibilités (1)", "CF", 735694, 735694, 566409]);
+  const inst = row("Installations");
+  assert.equal(inst[0], "Installations techniques, matériel et outillage industriels");
+  // Chaque montant tombe dans la colonne de son exercice, comme sur la ligne « Concessions ».
+  const cols = r => [6900, 250190].includes(r.find(v => typeof v === "number")) && r.map(v => typeof v === "number");
+  assert.deepEqual(cols(inst), cols(row("Concessions")));
+  assert.equal(wb.Sheets["Page 1"][XLSX.utils.encode_cell({ r: rows.indexOf(inst), c: inst.indexOf(250190) })].z, "#,##0");
+});
+
+test("OCR : l'image préparée n'a plus les traits du tableau", async () => {
+  const doc = core.openMu(await bilan());
+  const png = core.renderForOcr(doc, 0, 2);
+  const pix = new mupdf.Image(png).toPixmap();
+  const w = pix.getWidth(), px = pix.getPixels(), n = pix.getNumberOfComponents() + (pix.getAlpha() ? 1 : 0);
+  const dark = (x, y) => px[(y * w + x) * n] < 128;
+  const lineY = Math.round((842 - 650) * 2);
+  assert.ok(![...Array(200).keys()].some(i => dark(400 + i, lineY)), "trait effacé");
+  assert.ok([...Array(300).keys()].some(i => [...Array(20).keys()].some(j => dark(80 + i, Math.round((842 - 730) * 2) - j))), "texte gardé");
+});
+
+test("OCR : signes hauts et étroits d'un texte vertical écartés", () => {
+  const word = (text, h, confidence = 90) => ({ text, confidence, bbox: { x0: 0, y0: 0, x1: 10, y1: h } });
+  const kept = core.keepOcrWords([word("Capital", 20), word("souscrit", 21), word("AA", 20), word("8", 60), word("ACT", 70), word("bruit", 22, 10)]);
+  assert.deepEqual(kept.map(w => w.text), ["Capital", "souscrit", "AA"]);
+});
+
 test("Word : un document est produit", async () => {
   const blob = await core.toDocx(docx, core.extractRows(facture()));
   assert.ok(blob.size > 1000);
@@ -56,6 +111,9 @@ test("nombres à la française", () => {
   assert.equal(core.toNumber("1.234,56"), 1234.56);
   assert.equal(core.toNumber("0612345678"), "0612345678");
   assert.equal(core.toNumber("Papier A4"), "Papier A4");
+  assert.equal(core.toNumber("(5 095)"), -5095);
+  assert.equal(core.toNumber("(1)"), "(1)");
+  assert.equal(core.toNumber("41.016"), 41016);
 });
 
 test("un scan est détecté comme ayant besoin de l'OCR", () => {
