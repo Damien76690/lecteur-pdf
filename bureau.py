@@ -35,6 +35,8 @@ SITE = os.path.join(getattr(sys, "_MEIPASS", ICI), "site") if hasattr(sys, "_MEI
 DONNEES = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "MimPDF")
 JOURNAL = os.path.join(DONNEES, "journal.txt")
 INSTANCE = os.path.join(DONNEES, "instance.json")  # port et jeton de la fenêtre ouverte
+RECENTS = os.path.join(DONNEES, "recents.json")    # derniers documents ouverts (chemins)
+MAX_RECENTS = 12
 DEPOT = "Damien76690/lecteur-pdf"
 INSTALLATEUR = "MimPDF-installation.exe"
 VERROU = "MimPDF"  # l'installateur attend que ce verrou disparaisse (fenêtre fermée) avant de remplacer les fichiers
@@ -131,6 +133,26 @@ def oublier_instance():
         os.remove(INSTANCE)
     except (OSError, ValueError):
         pass
+
+
+def lire_recents():
+    try:
+        with open(RECENTS, encoding="utf-8") as f:
+            return [c for c in json.load(f) if isinstance(c, str)]
+    except (OSError, ValueError):
+        return []
+
+
+def retenir(chemin):
+    """Place `chemin` en tête des documents récents."""
+    chemin = os.path.abspath(chemin)
+    liste = [chemin] + [c for c in lire_recents() if os.path.normcase(c) != os.path.normcase(chemin)]
+    try:
+        os.makedirs(DONNEES, exist_ok=True)
+        with open(RECENTS, "w", encoding="utf-8") as f:
+            json.dump(liste[:MAX_RECENTS], f, ensure_ascii=False)
+    except OSError as e:
+        print("Documents récents :", repr(e), flush=True)
 
 
 def lire_instance():
@@ -281,6 +303,7 @@ class Api:
 
     def recevoir(self, chemin):
         """Met un fichier en attente et prévient la page (qui l'ouvre dès que le lecteur est prêt)."""
+        retenir(chemin)
         code = secrets.token_urlsafe(16)
         FICHIERS[code] = chemin
         self._demandes.append({"url": "/_fichier/" + code, "nom": os.path.basename(chemin)})
@@ -306,6 +329,26 @@ class Api:
             threading.Timer(0.5, self._window.destroy).start()
             return {"message": "Installation de la mise à jour…"}
         return {"message": "Aucune mise à jour à installer."}
+
+    def ouvrir(self):
+        """Fenêtre « Ouvrir » de Windows (plusieurs fichiers possibles)."""
+        import webview
+        choix = self._window.create_file_dialog(webview.FileDialog.OPEN, allow_multiple=True,
+                                                file_types=(FILTRES["pdf"], "Tous les fichiers (*.*)"))
+        for chemin in choix or []:
+            self.recevoir(chemin)
+
+    def recents(self):
+        """Documents récents qui existent toujours : [{chemin, nom, dossier}]."""
+        return [{"chemin": c, "nom": os.path.basename(c), "dossier": os.path.dirname(c)}
+                for c in lire_recents() if os.path.isfile(c)]
+
+    def ouvrir_recent(self, chemin):
+        if chemin in lire_recents() and os.path.isfile(chemin):  # uniquement un document de la liste
+            self.recevoir(chemin)
+
+    def plein_ecran(self):
+        self._window.toggle_fullscreen()
 
     def titre(self, texte):
         """Nom du document ouvert dans la barre de titre de Windows."""
