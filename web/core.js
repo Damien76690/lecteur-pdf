@@ -424,6 +424,199 @@ export async function imagesToPdf(list) {
   return out.save();
 }
 
+// ------------------------------------------------------------ signature par certificat
+
+const binary = u8 => { let s = ""; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode(...u8.subarray(i, i + 0x8000)); return s; };
+const fromBinary = str => Uint8Array.from(str, c => c.charCodeAt(0));
+const SIG_SIZE = 16384;   // octets réservés pour la signature (certificats compris)
+
+// Lit un certificat personnel (.p12 / .pfx) : { key, cert, chain, name, email, issuer, from, to }.
+export function readCertificate(forge, p12, password) {
+  let pkcs;
+  try { pkcs = forge.pkcs12.pkcs12FromAsn1(forge.asn1.fromDer(binary(p12)), password); }
+  catch (e) {
+    if (/password|MAC|Invalid|decrypt/i.test(e.message)) throw new Error("mot de passe du certificat incorrect");
+    throw new Error("ce fichier n'est pas un certificat .p12 / .pfx lisible");
+  }
+  const keyBag = [...(pkcs.getBags({ bagType: forge.pki.oids.pkcs8ShroudedKeyBag })[forge.pki.oids.pkcs8ShroudedKeyBag] || []),
+                  ...(pkcs.getBags({ bagType: forge.pki.oids.keyBag })[forge.pki.oids.keyBag] || [])][0];
+  const certs = (pkcs.getBags({ bagType: forge.pki.oids.certBag })[forge.pki.oids.certBag] || []).map(b => b.cert).filter(Boolean);
+  if (!keyBag?.key) throw new Error("ce certificat ne contient pas de clé privée (il faut le fichier .p12 / .pfx complet)");
+  // Le certificat du signataire est celui dont la clé publique correspond à la clé privée.
+  const cert = certs.find(c => c.publicKey.n?.equals?.(keyBag.key.n)) || certs[0];
+  if (!cert) throw new Error("aucun certificat dans ce fichier");
+  const field = (c, name) => c.subject.getField(name)?.value || "";
+  return { key: keyBag.key, cert, chain: certs.filter(c => c !== cert),
+    name: field(cert, "CN") || field(cert, "O"), email: field(cert, "E") || "",
+    issuer: cert.issuer.getField("CN")?.value || cert.issuer.getField("O")?.value || "",
+    from: cert.validity.notBefore, to: cert.validity.notAfter };
+}
+
+const pdfDate = d => {
+  const p = n => String(n).padStart(2, "0"), off = -d.getTimezoneOffset();
+  return `D:${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}` +
+    (off >= 0 ? "+" : "-") + `${p(Math.floor(Math.abs(off) / 60))}'${p(Math.abs(off) % 60)}'`;
+};
+const pdfText = t => "(" + t.replace(/[\\()]/g, "\\$&") + ")";
+const latin = t => [...t].map(c => c.charCodeAt(0) < 256 ? c : "?").join("")
+  .replace(/[\\()]/g, "\\$&").replace(/[\x80-\xff]/g, c => "\\" + c.charCodeAt(0).toString(8));
+
+// Signe le PDF avec un certificat (signature électronique PAdES de base, adbe.pkcs7.detached, SHA-256).
+// `rect` : cadre visible [x0, y0, x1, y1] tel qu'affiché sur la page `page`, ou null pour une signature invisible.
+// L'enregistrement est incrémental : les signatures déjà présentes restent valables.
+export function signPdf(forge, bytes, id, { page = 0, rect = null, reason = "", location = "", date = new Date() } = {}) {
+  const placeholder = "1111111111";
+  let signedBytes = withMu(bytes, doc => {
+    if (doc.canBeSavedIncrementally && !doc.canBeSavedIncrementally()) return null;
+    return prepare(doc);
+  });
+  if (!signedBytes) signedBytes = withMu(withMu(bytes, d => d.saveToBuffer("garbage=compact").asUint8Array().slice()), prepare);
+  return finish(signedBytes);
+
+  function prepare(doc) {
+    const pageObj = doc.findPage(page), mupage = doc.loadPage(page);
+    const toPdf = invert(mupage.getTransform());
+    const nSig = doc.countObjects();
+    const v = doc.addObject({ Type: "Sig", Filter: "Adobe.PPKLite", SubFilter: "adbe.pkcs7.detached",
+      ByteRange: [0, +placeholder, +placeholder, +placeholder], Contents: doc.newByteString(new Uint8Array(SIG_SIZE)),
+      M: pdfText(pdfDate(date)), Name: doc.newString(id.name), Reason: doc.newString(reason), Location: doc.newString(location) });
+    let box = [0, 0, 0, 0];
+    if (rect) {
+      const [ax, ay] = apply(toPdf, rect[0], rect[1]), [bx, by] = apply(toPdf, rect[2], rect[3]);
+      box = [Math.min(ax, bx), Math.min(ay, by), Math.max(ax, bx), Math.max(ay, by)];
+    }
+    const widget = doc.addObject({ Type: "Annot", Subtype: "Widget", FT: "Sig", F: 132, T: doc.newString(`Signature ${nSig}`),
+      Rect: box, V: v, P: pageObj });
+    if (rect) widget.put("AP", { N: appearance(doc, box, mupage.getTransform(), id, reason, location, date) });
+    mupage.destroy();
+    let annots = pageObj.get("Annots");
+    if (annots.isNull()) { annots = doc.newArray(); pageObj.put("Annots", annots); }
+    annots.push(widget);
+    const root = doc.getTrailer().get("Root");
+    let form = root.get("AcroForm");
+    if (form.isNull()) { form = doc.addObject({ Fields: [] }); root.put("AcroForm", form); }
+    let fieldsArr = form.get("Fields");
+    if (fieldsArr.isNull()) { fieldsArr = doc.newArray(); form.put("Fields", fieldsArr); }
+    fieldsArr.push(widget);
+    form.put("SigFlags", 3);
+    return doc.saveToBuffer("incremental").asUint8Array().slice();
+  }
+
+  // Cadre visible : nom du signataire, date, motif, avec un liseré bleu.
+  function appearance(doc, [x0, y0, x1, y1], ctm, id, reason, location, date) {
+    const w = x1 - x0, h = y1 - y0;
+    // Le contenu suit la rotation de la page pour être lu à l'horizontale.
+    const rot = Math.round(Math.atan2(ctm[1], ctm[0]) * 180 / Math.PI + 360) % 360;
+    const [bw, bh] = rot % 180 ? [h, w] : [w, h];
+    const lines = [[`Signé numériquement par ${id.name}`, 1], [`Date : ${date.toLocaleString("fr-FR")}`, 0],
+      ...(reason ? [[`Motif : ${reason}`, 0]] : []), ...(location ? [[`Lieu : ${location}`, 0]] : [])];
+    const size = Math.max(4, Math.min(10, bh / (lines.length * 1.3 + 0.6), ...lines.map(([t]) => (bw - 8) / (t.length * 0.5))));
+    let ops = `q 0.15 0.39 0.92 RG 1 w 0.5 0.5 ${bw - 1} ${bh - 1} re S `;
+    lines.forEach(([t, bold], k) => { ops += `BT /${bold ? "HeB" : "He"} ${size.toFixed(2)} Tf 4 ${(bh - size * (1.15 + k * 1.3)).toFixed(2)} Td (${latin(t)}) Tj ET `; });
+    ops += "Q";
+    const matrix = { 0: [1, 0, 0, 1, 0, 0], 90: [0, 1, -1, 0, w, 0], 180: [-1, 0, 0, -1, w, h], 270: [0, -1, 1, 0, 0, h] }[rot] || [1, 0, 0, 1, 0, 0];
+    const font = name => doc.addSimpleFont(new mupdf.Font(name), "Latin");
+    return doc.addStream(ops, { Type: "XObject", Subtype: "Form", BBox: [0, 0, bw, bh], Matrix: rot ? matrix.map((n, i) => i < 4 ? n : 0) : [1, 0, 0, 1, 0, 0],
+      Resources: { Font: { He: font("Helvetica"), HeB: font("Helvetica-Bold") } } });
+  }
+
+  function finish(out) {
+    const str = latin1.decode(out);
+    const br = [...str.matchAll(new RegExp(`/ByteRange\\s*\\[\\s*0\\s+${placeholder}\\s+${placeholder}\\s+${placeholder}\\s*\\]`, "g"))].pop();
+    const contents = [...str.matchAll(new RegExp(`/Contents\\s*<(0{${SIG_SIZE * 2}})>`, "g"))].pop();
+    if (!br || !contents) throw new Error("préparation de la signature impossible pour ce PDF");
+    const start = contents.index + contents[0].indexOf("<"), end = start + SIG_SIZE * 2 + 2;
+    const range = [0, start, end, out.length - end];
+    const text = `/ByteRange [${range.join(" ")}]`;
+    if (text.length > br[0].length) throw new Error("préparation de la signature impossible pour ce PDF");
+    out.set(new TextEncoder().encode(text.padEnd(br[0].length, " ")), br.index);
+    const data = new Uint8Array(range[1] + range[3]);
+    data.set(out.subarray(0, range[1]), 0); data.set(out.subarray(range[2]), range[1]);
+    const p7 = forge.pkcs7.createSignedData();
+    p7.content = forge.util.createBuffer(binary(data));
+    p7.addCertificate(id.cert);
+    id.chain.forEach(c => p7.addCertificate(c));
+    p7.addSigner({ key: id.key, certificate: id.cert, digestAlgorithm: forge.pki.oids.sha256,
+      authenticatedAttributes: [{ type: forge.pki.oids.contentType, value: forge.pki.oids.data },
+        { type: forge.pki.oids.messageDigest }, { type: forge.pki.oids.signingTime, value: date }] });
+    p7.sign({ detached: true });
+    const der = forge.asn1.toDer(p7.toAsn1()).getBytes();
+    if (der.length > SIG_SIZE) throw new Error("certificat trop volumineux pour la place réservée");
+    const hex = forge.util.bytesToHex(der).padEnd(SIG_SIZE * 2, "0");
+    out.set(new TextEncoder().encode(hex), start + 1);
+    return out;
+  }
+}
+
+// Signatures électroniques du document : signataire, émetteur du certificat, date, motif,
+// intact (le contenu signé n'a pas changé : vrai, faux, ou null si le format n'est pas reconnu)
+// et covers (la signature couvre tout le fichier : rien n'a été ajouté après elle).
+// La chaîne de confiance du certificat n'est pas vérifiée.
+export function signatures(forge, bytes) {
+  const hashes = { [forge.pki.oids.sha256]: forge.md.sha256, [forge.pki.oids.sha1]: forge.md.sha1,
+    [forge.pki.oids.sha384]: forge.md.sha384, [forge.pki.oids.sha512]: forge.md.sha512 };
+  return withMu(bytes, doc => {
+    const out = [];
+    for (let n = 1; n < doc.countObjects(); n++) {
+      const obj = doc.newIndirect(n).resolve();
+      if (!obj.isDictionary() || !obj.get("ByteRange").isArray() || !obj.get("Contents").isString()) continue;
+      const range = [0, 1, 2, 3].map(k => obj.get("ByteRange").get(k).asNumber());
+      const sig = { name: str(obj.get("Name")), reason: str(obj.get("Reason")), location: str(obj.get("Location")),
+        date: pdfDateToIso(str(obj.get("M"))), covers: range[2] + range[3] === bytes.length, intact: null, issuer: "" };
+      try {
+        const asn = forge.asn1.fromDer(binary(obj.get("Contents").asByteString()), { strict: false, parseAllBytes: false });
+        try {
+          const cert = forge.pkcs7.messageFromAsn1(asn).certificates?.[0];
+          sig.name ||= cert?.subject.getField("CN")?.value || "";
+          sig.issuer = cert?.issuer.getField("CN")?.value || cert?.issuer.getField("O")?.value || "";
+        } catch { /* certificat non RSA : nom lu dans le PDF */ }
+        const digest = findAttr(forge, asn, forge.pki.oids.messageDigest);
+        const md = hashes[findOid(forge, asn, oid => oid in hashes)];
+        if (digest && md) {
+          const h = md.create();
+          h.update(binary(bytes.subarray(range[0], range[0] + range[1])));
+          h.update(binary(bytes.subarray(range[2], range[2] + range[3])));
+          sig.intact = h.digest().getBytes() === digest.value;
+        }
+        const t = !sig.date && findAttr(forge, asn, forge.pki.oids.signingTime);
+        if (t) sig.date = (t.type === forge.asn1.Type.UTCTIME ? forge.asn1.utcTimeToDate(t.value) : forge.asn1.generalizedTimeToDate(t.value)).toISOString();
+      } catch { /* format de signature non reconnu : on affiche ce qu'on sait */ }
+      out.push(sig);
+    }
+    return out;
+  });
+  function str(o) { try { return o.isString() ? o.asString() : ""; } catch { return ""; } }
+}
+
+// « D:20261018143000+02'00' » -> date ISO (ou "" si illisible).
+function pdfDateToIso(d) {
+  const m = /^D:(\d{4})(\d\d)?(\d\d)?(\d\d)?(\d\d)?(\d\d)?([+\-Z])?(\d\d)?'?(\d\d)?/.exec(d);
+  if (!m) return "";
+  const [, y, mo = "01", da = "01", h = "00", mi = "00", se = "00", sign, oh = "00", om = "00"] = m;
+  const tz = !sign || sign === "Z" ? "Z" : `${sign}${oh}:${om}`;
+  const date = new Date(`${y}-${mo}-${da}T${h}:${mi}:${se}${tz}`);
+  return isNaN(date) ? "" : date.toISOString();
+}
+
+// Premier OID du message qui satisfait `test`, et valeur d'un attribut signé (SEQUENCE { OID, SET { valeur } }).
+function findOid(forge, node, test) {
+  if (node.type === forge.asn1.Type.OID && node.tagClass === forge.asn1.Class.UNIVERSAL) {
+    const oid = forge.asn1.derToOid(node.value);
+    return test(oid) ? oid : null;
+  }
+  if (!Array.isArray(node.value)) return null;
+  for (const child of node.value) { const r = findOid(forge, child, test); if (r) return r; }
+  return null;
+}
+function findAttr(forge, node, want) {
+  if (!Array.isArray(node.value)) return null;
+  const [oid, set] = node.value;
+  if (oid?.type === forge.asn1.Type.OID && !Array.isArray(oid.value) && forge.asn1.derToOid(oid.value) === want
+      && set?.type === forge.asn1.Type.SET && set.value?.[0]) return set.value[0];
+  for (const child of node.value) { const r = findAttr(forge, child, want); if (r) return r; }
+  return null;
+}
+
 // ------------------------------------------------------------ organiser les pages
 
 // « 1-3, 5, 8-fin » -> [0, 1, 2, 4, 7, …] (pages numérotées à partir de 1, dans l'ordre donné).

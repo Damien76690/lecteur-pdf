@@ -5,6 +5,7 @@ import * as mupdf from "mupdf";
 import * as PDFLib from "pdf-lib";
 import XLSX from "xlsx";
 import * as docx from "docx";
+import forge from "node-forge";
 import * as core from "../../web/core.js";
 import { makeExamples } from "../../scripts/exemples.mjs";
 
@@ -299,3 +300,50 @@ test("exporter une page en image", () => {
   assert.equal(core.imageType(png), "png");
   assert.equal(core.imageType(core.pageImage(open(facture()), 0, { format: "jpeg" })), "jpeg");
 });
+
+// ------------------------------------------------------------ signature par certificat
+
+// Certificat personnel de test (.p12) au nom de « Jeanne Martin ».
+function testP12(password = "1234") {
+  const keys = forge.pki.rsa.generateKeyPair(1024);
+  const cert = forge.pki.createCertificate();
+  cert.publicKey = keys.publicKey; cert.serialNumber = "01";
+  cert.validity.notBefore = new Date(Date.now() - 864e5); cert.validity.notAfter = new Date(Date.now() + 365 * 864e5);
+  const attrs = [{ name: "commonName", value: "Jeanne Martin" }, { name: "organizationName", value: "Mim Test" }];
+  cert.setSubject(attrs); cert.setIssuer(attrs); cert.sign(keys.privateKey, forge.md.sha256.create());
+  const der = forge.asn1.toDer(forge.pkcs12.toPkcs12Asn1(keys.privateKey, [cert], password, { algorithm: "3des" })).getBytes();
+  return Uint8Array.from(der, c => c.charCodeAt(0));
+}
+
+test("signer avec un certificat, vérifier, puis détecter une modification", () => {
+  const p12 = testP12();
+  assert.throws(() => core.readCertificate(forge, p12, "faux"), /mot de passe/);
+  const id = core.readCertificate(forge, p12, "1234");
+  assert.equal(id.name, "Jeanne Martin");
+  const signed = core.signPdf(forge, facture(), id, { page: 0, rect: [350, 700, 550, 760], reason: "J'approuve ce document", location: "Rouen" });
+  assert.ok(core.keepsOriginal(facture(), signed), "signature ajoutée à la suite du fichier");
+  assert.ok(core.isSigned(signed));
+  let [sig] = core.signatures(forge, signed);
+  assert.equal(sig.name, "Jeanne Martin");
+  assert.equal(sig.reason, "J'approuve ce document");
+  assert.equal(sig.intact, true);
+  assert.equal(sig.covers, true);
+  assert.match(text(signed), /Société Dupont/);
+  // Un commentaire ajouté ensuite garde la signature intacte, mais elle ne couvre plus tout le fichier.
+  const noted = core.annotate(signed, 0, { kind: "note", at: [400, 300], text: "Vu" });
+  [sig] = core.signatures(forge, noted);
+  assert.equal(sig.intact, true);
+  assert.equal(sig.covers, false);
+  // Un octet signé modifié est détecté.
+  const tampered = signed.slice();
+  const k = latin1(signed).indexOf("Dupont");
+  if (k > 0) tampered[k] = 0x58;
+  else tampered[200] ^= 1;
+  assert.equal(core.signatures(forge, tampered)[0].intact, false);
+  // Deux signatures successives restent toutes deux valables.
+  const twice = core.signPdf(forge, signed, id, { page: 0, rect: null, reason: "Contre-signature" });
+  const both = core.signatures(forge, twice);
+  assert.equal(both.length, 2);
+  assert.ok(both.every(s => s.intact));
+});
+const latin1 = b => new TextDecoder("latin1").decode(b);

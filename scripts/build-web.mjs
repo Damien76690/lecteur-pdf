@@ -14,6 +14,7 @@ const files = {
   "vendor/pdf-lib.min.js": "pdf-lib/dist/pdf-lib.min.js",
   "vendor/xlsx.full.min.js": "xlsx/dist/xlsx.full.min.js",
   "vendor/docx.iife.js": "docx/dist/index.iife.js",
+  "vendor/forge.min.js": "node-forge/dist/forge.min.js",
   "vendor/tesseract/tesseract.min.js": "tesseract.js/dist/tesseract.min.js",
   "vendor/tesseract/worker.min.js": "tesseract.js/dist/worker.min.js",
   "vendor/tesseract/core/tesseract-core-simd-lstm.wasm.js": "tesseract.js-core/tesseract-core-simd-lstm.wasm.js",

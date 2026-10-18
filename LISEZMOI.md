@@ -44,6 +44,8 @@ Les commandes sont rangées dans des onglets, comme dans Word : **Fichier**, **A
 | Remplir un formulaire PDF | Cliquez dans un champ (zones bleutées) et tapez, Tab pour passer au suivant ; cases à cocher, boutons radio et listes se règlent d'un clic |
 | Ouvrir un PDF protégé par mot de passe | Mim PDF demande le mot de passe ; la copie enregistrée garde la même protection |
 | Protéger un PDF | **Fichier › Protéger** : mot de passe à l'ouverture (chiffrement AES 256 bits) et/ou interdire l'impression, la copie ou les modifications |
+| Signer avec un certificat (signature électronique) | **Signer › Signer avec un certificat** : choisissez votre certificat (.p12 / .pfx) et son mot de passe, puis cliquez où placer le cadre. Signature PAdES (SHA-256) lisible par Adobe Reader ; plusieurs signatures successives restent valables |
+| Savoir qui a signé un PDF | **Signer › Signatures du document** : signataire, date, motif, et si le contenu a été modifié depuis |
 | Convertir | **Convertir** : Word, Excel, Texte ou PDF |
 | Créer un PDF à partir de photos ou de scans | Ouvrez (ou glissez) des images PNG ou JPEG : elles forment un nouveau PDF, une page par image. Ou **Convertir › PDF depuis images** |
 | Enregistrer une page en image | **Convertir › Page en PNG / Page en JPEG** (150 ppp) |
