@@ -37,6 +37,10 @@ Les commandes sont rangées dans des onglets, comme dans Word : **Fichier**, **A
 | Effacer une zone | **Modifier › Effacer une zone**, puis tracez un rectangle (le contenu est réellement supprimé) |
 | PDF scanné → texte | **Modifier › Reconnaître le texte** : le PDF devient sélectionnable, modifiable et convertible |
 | Pivoter, supprimer une page | **Pages**, ou boutons ⟳ et 🗑 en haut à droite de chaque page |
+| Changer l'ordre des pages | Glissez une miniature du panneau **Pages** à sa nouvelle place |
+| Ajouter une page blanche, insérer un autre PDF, fusionner | **Pages › Page blanche / Insérer un PDF / Fusionner** (insérer : après la page affichée ; fusionner : à la fin) |
+| Extraire des pages dans un nouveau PDF | **Pages › Extraire des pages**, puis par exemple `1-3, 5` : le résultat s'ouvre dans un nouvel onglet |
+| Numéroter les pages, poser un filigrane | **Pages › Numéroter** (position, « Page 1 / 10 »…, première page numérotée) et **Pages › Filigrane** (CONFIDENTIEL, COPIE…) |
 | Convertir | **Convertir** : Word, Excel, Texte ou PDF |
 
 **PDF signés électroniquement (Docusign, certificat…)** : un bandeau le signale à l'ouverture. Les commentaires, surlignages, tampons et signatures image sont ajoutés à la suite du fichier, sans toucher aux octets signés : la signature d'origine reste valable. Les autres modifications (rotation, suppression de page, texte écrit, OCR…) l'invalident dans la copie : Mim PDF prévient avant d'enregistrer.

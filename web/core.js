@@ -261,6 +261,110 @@ export async function deletePage(bytes, index) {
   return (await withPdfLib(bytes, doc => doc.removePage(index))).bytes;
 }
 
+// ------------------------------------------------------------ organiser les pages
+
+// « 1-3, 5, 8-fin » -> [0, 1, 2, 4, 7, …] (pages numérotées à partir de 1, dans l'ordre donné).
+export function parseRange(text, count) {
+  const out = [];
+  for (const part of String(text).split(/[,;]/).map(p => p.trim()).filter(Boolean)) {
+    const m = part.match(/^(\d+)\s*(?:-\s*(\d+|fin|end))?$/i);
+    if (!m) throw new Error(`« ${part} » n'est pas un numéro de page ni un intervalle (exemple : 1-3, 5)`);
+    const a = +m[1], b = m[2] ? (/^\d+$/.test(m[2]) ? +m[2] : count) : a;
+    if (a < 1 || b < 1 || a > count || b > count) throw new Error(`le document n'a que ${count} page(s)`);
+    for (let i = a; a <= b ? i <= b : i >= b; i += a <= b ? 1 : -1) out.push(i - 1);
+  }
+  if (!out.length) throw new Error("indiquez les pages, par exemple 1-3, 5");
+  return out;
+}
+
+// Déplace la page `from` pour qu'elle devienne la page `to`.
+export async function movePage(bytes, from, to) {
+  if (from === to) return bytes;
+  const order = [...Array(pageCount(bytes)).keys()];
+  order.splice(to, 0, ...order.splice(from, 1));
+  return reorder(bytes, order);
+}
+
+// Nouveau PDF fait des pages `indices` (dans cet ordre) : extraire, réorganiser.
+export async function reorder(bytes, indices) {
+  const src = await PDFLib.PDFDocument.load(bytes, { ignoreEncryption: true });
+  const out = await PDFLib.PDFDocument.create();
+  for (const p of await out.copyPages(src, indices)) out.addPage(p);
+  return out.save();
+}
+export const extractPages = reorder;
+
+// Insère toutes les pages de `other` après la page `after` (-1 : au début ; dernier indice : à la fin).
+export async function insertPdf(bytes, other, after) {
+  const add = await PDFLib.PDFDocument.load(other, { ignoreEncryption: true });
+  return (await withPdfLib(bytes, async doc => {
+    const pages = await doc.copyPages(add, add.getPageIndices());
+    pages.forEach((p, k) => doc.insertPage(after + 1 + k, p));
+  })).bytes;
+}
+
+// Fusionne plusieurs PDF, dans l'ordre.
+export async function mergePdfs(list) {
+  let bytes = list[0];
+  for (const other of list.slice(1)) bytes = await insertPdf(bytes, other, pageCount(bytes) - 1);
+  return bytes;
+}
+
+// Page blanche (du format de la page `after`) insérée après elle.
+export async function insertBlankPage(bytes, after) {
+  return (await withPdfLib(bytes, doc => {
+    const ref = doc.getPage(Math.max(after, 0));
+    const { width, height } = ref.getSize();
+    const page = doc.insertPage(after + 1, [width, height]);
+    page.setRotation(ref.getRotation());
+  })).bytes;
+}
+
+const pageCount = bytes => withMu(bytes, doc => doc.countPages());
+
+// Texte posé à l'horizontale (tel qu'affiché) de chaque page : numéros, filigrane…
+// `place(w, h, textWidth)` renvoie { x, y, angle } en coordonnées affichées (y vers le bas, angle en degrés
+// dans le sens inverse des aiguilles d'une montre), ou null pour ne rien écrire sur cette page.
+async function stampPages(bytes, textFor, place, { size = 11, color = "#000000", opacity = 1, bold = false } = {}) {
+  const geo = geometry(bytes), info = pageInfo(bytes);
+  return (await withPdfLib(bytes, async doc => {
+    const font = await doc.embedFont(bold ? PDFLib.StandardFonts.HelveticaBold : PDFLib.StandardFonts.Helvetica);
+    doc.getPages().forEach((page, i) => {
+      const text = safeText(font, textFor(i, info.length));
+      if (!text) return;
+      const sz = typeof size === "function" ? size(font.widthOfTextAtSize(text, 1), info[i].w, info[i].h) : size;
+      const tw = font.widthOfTextAtSize(text, sz);
+      const at = place(info[i].w, info[i].h, tw, sz);
+      if (!at) return;
+      const [x, y] = apply(geo[i].toPdf, at.x, at.y);
+      page.drawText(text, { x, y, size: sz, font, color: hexToRgb(color), opacity,
+        rotate: PDFLib.degrees(page.getRotation().angle + (at.angle || 0)) });
+    });
+  })).bytes;
+}
+
+// Numérote les pages. position : bas-centre | bas-droite | bas-gauche | haut-centre | haut-droite | haut-gauche ;
+// format : « {n} », « Page {n} / {total} »… ; first : numéro de la première page ; from : première page numérotée (indice).
+export function numberPages(bytes, { position = "bas-centre", format = "Page {n} / {total}", first = 1, from = 0, size = 10 } = {}) {
+  const margin = 24;
+  return stampPages(bytes, (i, total) => i < from ? "" : format.replace("{n}", first + i - from).replace("{total}", first + total - 1 - from),
+    (w, h, tw) => ({
+      x: position.endsWith("gauche") ? margin : position.endsWith("droite") ? w - margin - tw : (w - tw) / 2,
+      y: position.startsWith("haut") ? margin + size : h - margin,
+    }), { size });
+}
+
+// Filigrane en diagonale au centre de chaque page (texte semi-transparent).
+// Sans taille imposée, le texte occupe environ 75 % de la diagonale à 45° qui tient dans la page.
+export function watermark(bytes, text, { color = "#9ca3af", opacity = 0.3, size } = {}) {
+  const s = size || ((unit, w, h) => Math.min(0.75 * Math.SQRT2 * Math.min(w, h) / unit, Math.min(w, h) / 4));
+  const c = Math.SQRT1_2;
+  return stampPages(bytes, () => text, (w, h, tw, sz) => ({
+    // Départ du texte pour que son milieu tombe au centre de la page, en montant à 45°.
+    x: w / 2 - c * tw / 2 + c * sz * 0.35, y: h / 2 + c * tw / 2 + c * sz * 0.35, angle: 45,
+  }), { size: s, color, opacity, bold: true });
+}
+
 // Ajoute une couche de texte invisible à partir des mots reconnus par l'OCR :
 // la page garde son aspect mais devient sélectionnable, modifiable et convertible.
 // `pages` = [{ index, zoom, words: [{ text, bbox: {x0,y0,x1,y1}, baseline?: {y0,y1} }] }]
