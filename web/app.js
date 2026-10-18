@@ -1034,21 +1034,27 @@ async function ocr(_, only = doc.pages.map((p, i) => i)) {
       // Mode 6 (un bloc de texte) sur une image débarrassée des traits de tableau : c'est ce qui lit
       // le mieux les montants des formulaires (bilans, liasses fiscales…) comme le texte courant.
       checking = false;
-      await worker.setParameters({ tessedit_pageseg_mode: "6", tessedit_char_whitelist: "" });
+      await worker.setParameters({ tessedit_pageseg_mode: "6", tessedit_char_whitelist: "", preserve_interword_spaces: "0" });
       const png = core.renderForOcr(doc.mu, only[current], OCR_ZOOM);
       const image = new Blob([png], { type: "image/png" });
       const { data } = await worker.recognize(image);
       // Seconde lecture de chaque montant, seul et en chiffres uniquement : c'est elle qui
       // rattrape un « 1 » pris pour « | », un chiffre gras avalé ou un petit pourcentage.
       const view = new DataView(png.buffer, png.byteOffset);
-      const zones = core.numberZones(data.words, { width: view.getUint32(16), height: view.getUint32(20) });
+      const size = { width: view.getUint32(16), height: view.getUint32(20) };
+      const zones = core.numberZones(data.words, size);
       await worker.setParameters({ tessedit_pageseg_mode: "7", tessedit_char_whitelist: "0123456789 ,.-()/%" });
       const reads = [];
       checking = true;
       say(`Vérification des montants : page ${current + 1} / ${only.length}…`);
       for (const z of zones) reads.push((await worker.recognize(image, { rectangle: z.rect })).data);
-      const words = core.mergeNumberReads(data.words, zones, reads);
-      pages.push({ index: only[current], zoom: OCR_ZOOM, words: core.keepOcrWords(words) });
+      const words = core.keepOcrWords(core.mergeNumberReads(data.words, zones, reads));
+      // Puis chaque libellé peu sûr, relu seul sur sa ligne.
+      const lines = core.textZones(words, size), texts = [];
+      await worker.setParameters({ tessedit_pageseg_mode: "7", tessedit_char_whitelist: "", preserve_interword_spaces: "1" });
+      say(`Vérification des libellés : page ${current + 1} / ${only.length}…`);
+      for (const z of lines) texts.push((await worker.recognize(image, { rectangle: z.rect })).data);
+      pages.push({ index: only[current], zoom: OCR_ZOOM, words: core.mergeTextReads(words, lines, texts) });
     }
   } finally { await worker.terminate(); }
   if (!pages.some(p => p.words.length)) throw new Error("aucun texte reconnu");

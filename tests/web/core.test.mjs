@@ -96,7 +96,8 @@ test("OCR : l'image préparée n'a plus les traits du tableau", async () => {
 });
 
 test("OCR : signes hauts et étroits d'un texte vertical écartés", () => {
-  const word = (text, h, confidence = 90) => ({ text, confidence, bbox: { x0: 0, y0: 0, x1: 10, y1: h } });
+  let x = 0;
+  const word = (text, h, confidence = 90) => ({ text, confidence, bbox: { x0: x += 100, y0: 0, x1: x + 10, y1: h } });
   const kept = core.keepOcrWords([word("Capital", 20), word("souscrit", 21), word("AA", 20), word("8", 60), word("ACT", 70), word("bruit", 22, 10)]);
   assert.deepEqual(kept.map(w => w.text), ["Capital", "souscrit", "AA"]);
 });
@@ -135,6 +136,62 @@ test("Excel d'un scan : titre de colonne sur ses montants, mots séparés, cases
   const col = text => rows.flat().find(c => c.text === text).col;
   assert.equal(col("31/12/2025"), col("1 234"));
   assert.equal(col("58 023"), col("56 789"));
+});
+
+test("OCR : chaque libellé peu sûr est relu, la relecture n'est gardée que si elle est meilleure", () => {
+  const word = (text, x0, y0, confidence = 70) => ({ text, confidence, bbox: { x0, y0, x1: x0 + text.length * 12, y1: y0 + 25 } });
+  const words = [word("laméthode", 10, 0), word("de", 130, 0), word("mise", 160, 0),
+    word("incorporelles", 10, 100),
+    word("PME", 10, 200, 92), word("innovantes", 60, 200, 90),
+    word("tanaupus", 10, 300, 30), word("GE", 10, 400, 25), word("a", 50, 400, 25),
+    word("CS", 10, 500, 60), word("12", 300, 500, 90)];
+  const zones = core.textZones(words, { width: 1000, height: 1000 });
+  assert.deepEqual(zones.map(z => z.ids.map(i => words[i].text).join(" ")),
+    ["laméthode de mise", "incorporelles", "PME innovantes", "tanaupus", "GE a", "CS"]);
+  const read = (text, confidence) => ({ text, confidence, words: text.split(" ").filter(Boolean).map(t => ({ text: t, confidence })) });
+  const merged = core.mergeTextReads(words, zones, [read("la méthode de mise", 95), read("incorpo relles", 92),
+    read("PM innovantes", 93), read("1 an au plus", 93), read("", 0), read("CJ", 90)]);
+  assert.deepEqual(merged.map(w => w.text), ["la méthode de mise", "incorporelles", "PME", "innovantes", "1 an au plus", "CS", "12"]);
+});
+
+test("OCR : signe lu sur un grand titre écarté, petits mots gardés", () => {
+  const word = (text, x0, y0, x1, y1, confidence = 90) => ({ text, confidence, bbox: { x0, y0, x1, y1 } });
+  const kept = core.keepOcrWords([word("Créances", 875, 378, 1245, 449), word("4", 1000, 378, 1019, 398, 47),
+    word("Dettes", 1371, 379, 1622, 447), word("Etat", 100, 600, 150, 625), word("exprimé", 160, 600, 260, 625),
+    word("Prêts", 100, 640, 150, 665), word("Clients", 100, 680, 150, 705), word("Stocks", 300, 680, 350, 705),
+    word("Désignation", 100, 700, 300, 790), word("du", 120, 720, 150, 740)]);
+  assert.deepEqual(kept.map(w => w.text), ["Créances", "Dettes", "Etat", "exprimé", "Prêts", "Clients", "Stocks", "Désignation", "du"]);
+});
+
+test("OCR : confusions courantes des liasses fiscales corrigées", () => {
+  const fix = core.fixOcrLabel;
+  assert.equal(fix("TOTAL (Im"), "TOTAL (II)");
+  assert.equal(fix("TOTAL (D"), "TOTAL (I)");
+  assert.equal(fix("TOTAL GENERAL (1a VD)"), "TOTAL GENERAL (I à VI)");
+  assert.equal(fix("TOTAL GENERAL (là V)"), "TOTAL GENERAL (I à V)");
+  assert.equal(fix("Total des charges financières (VI GU"), "Total des charges financières (VI) GU");
+  assert.equal(fix("aplus de Sans"), "à plus de 5 ans");
+  assert.equal(fix("entre letSans"), "entre 1 et 5 ans");
+  assert.equal(fix("alan au plus"), "à 1 an au plus");
+  assert.equal(fix("1aSans"), "1 à 5 ans");
+  assert.equal(fix("Rèalement ANC 2022-06"), "Règlement ANC 2022-06");
+  assert.equal(fix("(ébis)"), "(6bis)");
+  assert.equal(fix("Sans objet"), "Sans objet");
+  assert.equal(fix("TOTAL (Dont"), "TOTAL (Dont");
+});
+
+test("Excel d'un scan : titre sur deux lignes, bords d'une case de date, année du formulaire", async () => {
+  const d = await PDFLib.PDFDocument.create();
+  d.addPage([595, 842]);
+  const word = (text, x0, y0, x1, h = 12) => ({ text, bbox: { x0, y0, x1, y1: y0 + h } });
+  const words = [word("DGFiP", 400, 40, 440), word("N°", 445, 40, 460), word("2051", 465, 40, 495), word("2025", 520, 40, 550),
+    word("Matériels", 300, 80, 350, 10), word("et", 355, 80, 365, 10), word("outillages", 305, 82, 360, 16),
+    word("1", 280, 110, 283), word("31/12/2025", 300, 110, 360), word("1", 375, 110, 378),
+    word("Clients", 50, 140, 90), word("1", 330, 140, 336), word("234", 340, 140, 370)];
+  const rows = core.extractRows(await core.addOcrLayer(await d.save(), [{ index: 0, zoom: 1, words }]))[0].map(r => r.cells.map(c => c.text));
+  assert.ok(rows.some(r => r.includes("DGFiP N° 2051 2025")), JSON.stringify(rows));
+  assert.ok(rows.some(r => r.includes("Matériels et outillages")), JSON.stringify(rows));
+  assert.ok(rows.some(r => r.join() === "31/12/2025"), JSON.stringify(rows));
 });
 
 test("Word : un document est produit", async () => {

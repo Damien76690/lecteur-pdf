@@ -35,7 +35,7 @@ Les commandes sont rangées dans des onglets, comme dans Word : **Fichier**, **A
 | Écrire sur la page (taille et couleur réglables) | **Modifier › Écrire**, puis cliquez à l'endroit voulu |
 | Corriger un texte | **Modifier** : Rechercher / Remplacer par, puis **Remplacer** (toutes les occurrences) |
 | Effacer une zone | **Modifier › Effacer une zone**, puis tracez un rectangle (le contenu est réellement supprimé) |
-| PDF scanné → texte | **Modifier › Reconnaître le texte** : le PDF devient sélectionnable, modifiable et convertible. Les boutons Word, Excel et Texte le font d'eux-mêmes sur un scan, et chaque montant est relu une seconde fois, seul, en chiffres |
+| PDF scanné → texte | **Modifier › Reconnaître le texte** : le PDF devient sélectionnable, modifiable et convertible. Les boutons Word, Excel et Texte le font d'eux-mêmes sur un scan, et chaque montant est relu une seconde fois, seul, en chiffres, puis chaque libellé peu sûr ligne par ligne |
 | Pivoter, supprimer une page | **Pages**, ou boutons ⟳ et 🗑 en haut à droite de chaque page |
 | Changer l'ordre des pages | Glissez une miniature du panneau **Pages** à sa nouvelle place |
 | Ajouter une page blanche, insérer un autre PDF, fusionner | **Pages › Page blanche / Insérer un PDF / Fusionner** (insérer : après la page affichée ; fusionner : à la fin) |
