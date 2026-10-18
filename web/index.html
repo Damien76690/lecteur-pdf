@@ -73,7 +73,11 @@
   .mode-highlight .page img, .mode-underline .page img, .mode-strike .page img { cursor:text; }
   .mode-ink .page img, .mode-rect .page img, .mode-ellipse .page img, .mode-arrow .page img { cursor:crosshair; }
   .mode-note .page img, .mode-textbox .page img, .mode-stamp .page img, .mode-sign .page img,
-  .mode-initials .page img, .mode-date .page img { cursor:copy; }
+  .mode-initials .page img, .mode-date .page img, .mode-certsign .page img { cursor:copy; }
+  #sig-list { margin:8px 0; display:flex; flex-direction:column; gap:8px; max-height:50vh; overflow:auto; }
+  #sig-list .sig { border:1px solid var(--border); border-radius:8px; padding:8px 10px; font-size:13px; line-height:1.5; }
+  #sig-list .ok { color:#15803d; } #sig-list .warn { color:#b45309; } #sig-list .bad { color:#b91c1c; }
+  #cert-dlg input[type=text], #cert-dlg input[type=password] { width:200px; }
   .drawing .page { touch-action:none; }
   .seg { display:flex; gap:4px; margin:8px 0; }
   dialog h3 { margin:0 0 4px; font-size:16px; }
@@ -276,6 +280,10 @@
         <button class="big" data-mode="date" title="Cliquez pour écrire la date du jour"><span class="ic">📅</span>Date du jour</button>
       </div><span class="gl">Date</span></div>
       <div class="group"><div class="tools">
+        <button class="big" id="cert-sign" title="Signature électronique avec votre certificat personnel (.p12 / .pfx)"><span class="ic">🔏</span>Signer avec un certificat</button>
+        <button class="big" id="cert-list" title="Voir qui a signé ce document et si le contenu signé est intact"><span class="ic">🛡</span>Signatures du document</button>
+      </div><span class="gl">Signature électronique</span></div>
+      <div class="group"><div class="tools">
         <p class="legal">Signature image : utile pour un document courant, mais sans valeur de signature électronique certifiée.
         <button id="legal-more" class="link">En savoir plus</button></p>
       </div><span class="gl">Valeur juridique</span></div>
@@ -429,11 +437,34 @@
   </form>
 </dialog>
 <input id="images-file" type="file" accept="image/png,image/jpeg" multiple hidden>
+<dialog id="cert-dlg">
+  <form method="dialog">
+    <h3>Signer avec un certificat</h3>
+    <p class="hint">Votre certificat de signature (fichier .p12 ou .pfx, délivré par un prestataire de confiance ou exporté depuis Windows). Il reste sur cet appareil et n'est pas mémorisé.</p>
+    <label class="btn">Choisir le certificat<input id="cert-file" type="file" accept=".p12,.pfx,application/x-pkcs12" hidden></label>
+    <span id="cert-name" class="hint"></span>
+    <label class="row">Mot de passe du certificat <input id="cert-pass" type="password" autocomplete="off"></label>
+    <label class="row">Motif <input id="cert-reason" type="text" list="cert-reasons" value="J'approuve ce document"></label>
+    <datalist id="cert-reasons"><option value="J'approuve ce document"><option value="Je suis l'auteur de ce document"><option value="Lu et approuvé"><option value="Bon pour accord"></datalist>
+    <label class="row">Lieu <input id="cert-location" type="text" placeholder="facultatif"></label>
+    <label class="check"><input id="cert-visible" type="checkbox" checked> Afficher un cadre de signature sur la page</label>
+    <div class="actions"><button value="cancel">Annuler</button><button value="ok" class="primary">Continuer</button></div>
+  </form>
+</dialog>
+<dialog id="sigs-dlg">
+  <form method="dialog">
+    <h3>Signatures du document</h3>
+    <div id="sig-list"></div>
+    <p class="hint">Mim PDF vérifie que le contenu signé n'a pas changé. Il ne vérifie pas si l'autorité qui a délivré le certificat est reconnue : en cas de doute, ouvrez aussi le document dans Adobe Acrobat Reader.</p>
+    <div class="actions"><button value="ok" class="primary">Fermer</button></div>
+  </form>
+</dialog>
 <dialog id="legal-dlg">
   <form method="dialog">
     <h3>Valeur juridique d'une signature</h3>
     <p>Une signature dessinée, tapée ou scannée posée sur un PDF est une <strong>image</strong>. Elle convient pour un bon de commande, un document interne ou un accord simple.</p>
     <p>Elle ne vaut pas signature électronique au sens du règlement européen eIDAS : en cas de litige, c'est à celui qui l'invoque de prouver qui a signé (Cour de cassation, chambre commerciale, 13 mars 2024).</p>
+    <p><strong>Signer avec un certificat</strong> (onglet Signer) crée une vraie signature électronique, reconnue par Adobe Reader et les autres lecteurs. Sa valeur dépend de votre certificat : un certificat délivré par un prestataire de confiance donne une signature « avancée » ou « qualifiée ».</p>
     <p>Pour un contrat engageant, utilisez une <strong>signature électronique qualifiée</strong>, délivrée par un prestataire de confiance (liste publiée par l'ANSSI) : seule celle-ci est présumée fiable comme une signature manuscrite (Code civil, art. 1367, décret 2017-1416).</p>
     <div class="actions"><button value="ok" class="primary">J'ai compris</button></div>
   </form>

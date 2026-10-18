@@ -8,6 +8,7 @@ const LIBS = {
   xlsx: "vendor/xlsx.full.min.js",
   docx: "vendor/docx.iife.js",
   tesseract: "vendor/tesseract/tesseract.min.js",
+  forge: "vendor/forge.min.js",
 };
 const vendorUrl = path => new URL("vendor/tesseract/" + path, location.href).href;
 
@@ -81,6 +82,7 @@ function showInfo() {
   if (doc.signed) parts.push(core.keepsOriginal(doc.original, doc.bytes)
     ? "🔏 Ce document est signé électroniquement. Vos commentaires, surlignages et signatures sont ajoutés sans toucher à la signature d'origine."
     : "⚠ Ce document était signé électroniquement : vos modifications rendent cette signature invalide dans la copie enregistrée (le fichier d'origine n'est pas touché).");
+  if (doc.signed) parts.push("Détails : Signer › Signatures du document.");
   if (doc.fields) parts.push(`Ce document contient ${plural(doc.fields, "champ")} de formulaire : cliquez dedans pour les remplir.`);
   if (doc.protection) parts.push("🔒 Le PDF enregistré sera protégé par " + (doc.protection.password ? "mot de passe." : "des restrictions (impression, copie ou modification).") +
     " Fichier › Protéger pour changer.");
@@ -612,6 +614,76 @@ $("#images-file").onchange = async e => {
   if (list.length) openImages(list, files[0].name.replace(/\.[^.]+$/, ""));
 };
 
+// ------------------------------------------------------------ signature électronique par certificat
+
+let certId = null, certOptions = null;   // certificat ouvert pour cette session uniquement (jamais enregistré)
+let certFile = null;
+$("#cert-file").onchange = e => {
+  certFile = e.target.files[0] || null;
+  $("#cert-name").textContent = certFile ? certFile.name : "";
+  e.target.value = "";
+};
+
+async function startCertSign() {
+  await loadScript(LIBS.forge);
+  const dlg = $("#cert-dlg");
+  $("#cert-pass").value = "";
+  $("#cert-name").textContent = certId ? `Certificat ouvert : ${certId.name}` : certFile ? certFile.name : "";
+  for (;;) {
+    const ok = await new Promise(done => { dlg.onclose = () => done(dlg.returnValue === "ok"); dlg.returnValue = ""; dlg.showModal(); });
+    if (!ok) return;
+    if (certFile) {
+      try { certId = core.readCertificate(forge, new Uint8Array(await certFile.arrayBuffer()), $("#cert-pass").value); certFile = null; }
+      catch (e) { say("Certificat : " + e.message + ".", true); continue; }
+    }
+    if (!certId) { say("Choisissez d'abord votre certificat (.p12 ou .pfx).", true); continue; }
+    const now = new Date();
+    if (now < certId.from || now > certId.to) {
+      say(`Le certificat de ${certId.name} n'est pas valable aujourd'hui (valable du ${certId.from.toLocaleDateString("fr-FR")} au ${certId.to.toLocaleDateString("fr-FR")}).`, true);
+      certId = null; continue;
+    }
+    break;
+  }
+  certOptions = { reason: $("#cert-reason").value.trim(), location: $("#cert-location").value.trim() };
+  if ($("#cert-visible").checked) { setMode("certsign"); say(`Certificat de ${certId.name} prêt. Cliquez à l'endroit où placer le cadre de la signature (Échap pour annuler).`); }
+  else certSign(current, null);
+}
+
+async function certSign(i, rect) {
+  if (!certId) return startCertSign();
+  if (modified(doc) && !confirm("Le document a des modifications non enregistrées : elles seront incluses dans ce que vous signez. Continuer ?")) return;
+  const id = certId;
+  await edit("Signature électronique…", b => core.signPdf(forge, b, id, { page: i, rect, ...certOptions }), () => {
+    doc.signed = true; doc.original = doc.bytes;
+    return `Document signé électroniquement par ${id.name}. Enregistrez-le maintenant (Ctrl+S) : ensuite, seuls des commentaires peuvent être ajoutés sans invalider la signature.`;
+  });
+}
+
+async function showCertSignatures() {
+  await loadScript(LIBS.forge);
+  const list = $("#sig-list");
+  list.innerHTML = "";
+  let sigs = [];
+  try { sigs = core.signatures(forge, doc.bytes); } catch (e) { console.error(e); }
+  if (!sigs.length) list.innerHTML = "<p>Ce document ne contient aucune signature électronique.</p>";
+  for (const s of sigs) {
+    const div = document.createElement("div");
+    div.className = "sig";
+    const [cls, status] = s.intact === false ? ["bad", "✖ Le contenu a été modifié après la signature : elle n'est plus valable."]
+      : s.intact === null ? ["warn", "? Format de signature que Mim PDF ne sait pas contrôler."]
+      : s.covers ? ["ok", "✔ Document non modifié depuis la signature."]
+      : ["ok", "✔ Contenu signé intact. Des ajouts (commentaires, autres signatures…) ont été faits après."];
+    const date = s.date ? new Date(s.date).toLocaleString("fr-FR") : "date inconnue";
+    div.innerHTML = `<strong></strong><br><span class="meta"></span><br><span class="${cls}"></span>`;
+    div.querySelector("strong").textContent = s.name || "Signataire inconnu";
+    div.querySelector(".meta").textContent = [`Signé le ${date}`, s.reason && `Motif : ${s.reason}`, s.location && `Lieu : ${s.location}`,
+      s.issuer && `Certificat délivré par ${s.issuer}`].filter(Boolean).join(" · ");
+    div.querySelector(`.${cls}`).textContent = status;
+    list.appendChild(div);
+  }
+  $("#sigs-dlg").showModal();
+}
+
 // ------------------------------------------------------------ organiser les pages
 
 const blankPage = () => edit("Ajout d'une page…", b => core.insertBlankPage(b, current), () => `Page blanche ajoutée (page ${current + 2}).`);
@@ -781,6 +853,11 @@ async function place(i, p, pt) {
   } else if (mode === "date") {
     const text = new Date().toLocaleDateString("fr-FR");
     edit("Ajout…", b => core.annotate(b, i, { kind: "date", at: [pt.x, pt.y - 7], text, size: 11 }), "Date ajoutée.");
+  } else if (mode === "certsign") {
+    const w = Math.min(220, p.w * 0.45), h = w * 0.3;
+    const x = Math.min(Math.max(pt.x - w / 2, 0), p.w - w), y = Math.min(Math.max(pt.y - h / 2, 0), p.h - h);
+    setMode("read");
+    certSign(i, [x, y, x + w, y + h]);
   } else if (mode === "sign" || mode === "initials") {
     const kind = mode === "sign" ? "signature" : "paraphe";
     const sig = signatures[kind] || await editSignature(kind);
@@ -1021,7 +1098,7 @@ const HINTS = { read: "Mode lecture.", text: "Cliquez sur la page à l'endroit o
                 textbox: "Cliquez à l'endroit où ajouter la zone de texte.", ink: "Dessinez à main levée sur la page.",
                 rect: "Tracez le rectangle.", ellipse: "Tracez l'ellipse.", arrow: "Tracez la flèche, de son départ vers sa pointe.",
                 stamp: "Cliquez à l'endroit où poser le tampon.", date: "Cliquez à l'endroit où écrire la date du jour.",
-                sign: "Cliquez à l'endroit où poser votre signature.", initials: "Cliquez à l'endroit où poser votre paraphe." };
+                sign: "Cliquez à l'endroit où poser votre signature.", certsign: "Cliquez à l'endroit où placer le cadre de la signature électronique.", initials: "Cliquez à l'endroit où poser votre paraphe." };
 function setMode(m) {
   mode = m;
   $$("[data-mode]").forEach(x => x.classList.toggle("on", x.dataset.mode === m));
@@ -1074,6 +1151,8 @@ $("#rotate-right").onclick = () => rotate(current, 90);
 $("#delete-page").onclick = () => removePage(current);
 $("#blank-page").onclick = blankPage;
 $("#protect").onclick = protectDoc;
+$("#cert-sign").onclick = startCertSign;
+$("#cert-list").onclick = showCertSignatures;
 $("#compress").onclick = compressDoc;
 $("#flatten").onclick = flattenDoc;
 $("#export-png").onclick = () => exportImage("png");
@@ -1147,7 +1226,7 @@ $$("[data-side]").forEach(b => b.onclick = () => openSide(b.dataset.side));
 $("#ocr").onclick = () => edit("Reconnaissance du texte…", ocr,
   "Texte reconnu : le PDF est maintenant sélectionnable et convertible. Vérifiez les chiffres importants.");
 $$("[data-dl]").forEach(b => b.onclick = () => save(b.dataset.dl));
-$$("label.btn input[type=file]").forEach(i => i.onchange = e => { openFiles(e.target.files); e.target.value = ""; });
+$$("#file, input.open").forEach(i => i.onchange = e => { openFiles(e.target.files); e.target.value = ""; });
 $$("[data-sample]").forEach(b => b.onclick = async () => {
   const r = await fetch(`exemples/${b.dataset.sample}.pdf`);
   openBytes(new Uint8Array(await r.arrayBuffer()), b.dataset.sample);
