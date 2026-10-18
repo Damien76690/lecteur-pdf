@@ -20,6 +20,8 @@ OutputDir=..\dist
 OutputBaseFilename=MimPDF-installation
 AppVerName=Mim PDF {#Version}
 CloseApplications=yes
+; Prévient l'Explorateur que Mim PDF sait ouvrir les .pdf (menu « Ouvrir avec »).
+ChangesAssociations=yes
 SetupIconFile=icone.ico
 UninstallDisplayIcon={app}\MimPDF.exe
 LicenseFile=..\LICENSE
@@ -53,6 +55,26 @@ Source: "..\build\MicrosoftEdgeWebview2Setup.exe"; DestDir: "{tmp}"; Flags: dele
 Name: "{group}\Mim PDF"; Filename: "{app}\MimPDF.exe"
 Name: "{group}\Désinstaller Mim PDF"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\Mim PDF"; Filename: "{app}\MimPDF.exe"; Tasks: bureau
+
+[Registry]
+; Mim PDF apparaît dans « Ouvrir avec » et dans Paramètres > Applications par défaut, avec son icône,
+; SANS devenir le lecteur par défaut : c'est la personne qui le choisit elle-même dans Windows.
+; HKA = l'utilisateur courant (installation sans droits administrateur) ou tout l'ordinateur.
+Root: HKA; Subkey: "Software\Classes\MimPDF.pdf"; ValueType: string; ValueName: ""; ValueData: "Document PDF"; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\MimPDF.pdf"; ValueType: string; ValueName: "FriendlyTypeName"; ValueData: "Document PDF"
+Root: HKA; Subkey: "Software\Classes\MimPDF.pdf\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\MimPDF.exe,0"
+Root: HKA; Subkey: "Software\Classes\MimPDF.pdf\shell\open"; ValueType: string; ValueName: "FriendlyAppName"; ValueData: "Mim PDF"
+Root: HKA; Subkey: "Software\Classes\MimPDF.pdf\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\MimPDF.exe"" ""%1"""
+Root: HKA; Subkey: "Software\Classes\.pdf\OpenWithProgids"; ValueType: string; ValueName: "MimPDF.pdf"; ValueData: ""; Flags: uninsdeletevalue
+; Entrée créée par Windows si on a déjà choisi MimPDF.exe à la main dans « Ouvrir avec » : on la corrige.
+Root: HKA; Subkey: "Software\Classes\Applications\MimPDF.exe"; ValueType: string; ValueName: "FriendlyAppName"; ValueData: "Mim PDF"; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\Applications\MimPDF.exe\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\MimPDF.exe,0"
+Root: HKA; Subkey: "Software\Classes\Applications\MimPDF.exe\SupportedTypes"; ValueType: string; ValueName: ".pdf"; ValueData: ""
+Root: HKA; Subkey: "Software\Classes\Applications\MimPDF.exe\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\MimPDF.exe"" ""%1"""
+Root: HKA; Subkey: "Software\MimPDF\Capabilities"; ValueType: string; ValueName: "ApplicationName"; ValueData: "Mim PDF"; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\MimPDF\Capabilities"; ValueType: string; ValueName: "ApplicationDescription"; ValueData: "Lire, modifier, signer et convertir des PDF"
+Root: HKA; Subkey: "Software\MimPDF\Capabilities\FileAssociations"; ValueType: string; ValueName: ".pdf"; ValueData: "MimPDF.pdf"
+Root: HKA; Subkey: "Software\RegisteredApplications"; ValueType: string; ValueName: "Mim PDF"; ValueData: "Software\MimPDF\Capabilities"; Flags: uninsdeletevalue
 
 [Run]
 Filename: "{tmp}\MicrosoftEdgeWebview2Setup.exe"; Parameters: "/silent /install"; StatusMsg: "Installation du composant d'affichage Microsoft WebView2..."; Check: WebView2Absent

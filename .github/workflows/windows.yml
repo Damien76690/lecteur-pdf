@@ -56,6 +56,30 @@ jobs:
           Get-Content "$env:LOCALAPPDATA\MimPDF\journal.txt" -ErrorAction SilentlyContinue | Select-Object -Last 30
           if ($p.ExitCode -ne 0) { throw "La fenêtre ne s'est pas ouverte (code $($p.ExitCode))" }
 
+      - name: Vérifier « Ouvrir avec Mim PDF » (le PDF donné au lancement s'ouvre tout seul)
+        timeout-minutes: 10
+        shell: pwsh
+        run: |
+          $journal = "$env:LOCALAPPDATA\MimPDF\journal.txt"
+          $pdf = Join-Path $env:RUNNER_TEMP "Ma facture.pdf"
+          Copy-Item exemples\facture.pdf $pdf
+          # 1) Mim PDF fermé : Windows lance  MimPDF.exe "Ma facture.pdf"
+          $p = Start-Process "dist\MimPDF\MimPDF.exe" -ArgumentList "--essai-fenetre", "`"$pdf`"" -Wait -PassThru
+          Get-Content $journal -ErrorAction SilentlyContinue | Select-Object -Last 30
+          if ($p.ExitCode -ne 0) { throw "Le PDF passé au lancement ne s'est pas ouvert (code $($p.ExitCode))" }
+          # 2) Mim PDF déjà ouvert : le second lancement confie le fichier à la fenêtre ouverte
+          Remove-Item "$env:LOCALAPPDATA\MimPDF\instance.json" -ErrorAction SilentlyContinue
+          $pdf2 = Join-Path $env:RUNNER_TEMP "Facture 2.pdf"
+          Copy-Item exemples\facture.pdf $pdf2
+          $p1 = Start-Process "dist\MimPDF\MimPDF.exe" -ArgumentList "--essai-fenetre", "`"--attendre=Facture 2.pdf`"" -PassThru
+          $null = $p1.Handle
+          for ($i = 0; $i -lt 90 -and -not (Test-Path "$env:LOCALAPPDATA\MimPDF\instance.json"); $i++) { Start-Sleep 1 }
+          $p2 = Start-Process "dist\MimPDF\MimPDF.exe" -ArgumentList "--essai-second", "`"$pdf2`"" -Wait -PassThru
+          if ($p2.ExitCode -ne 0) { throw "Le second lancement n'a pas pu confier le fichier (code $($p2.ExitCode))" }
+          $p1.WaitForExit()
+          Get-Content $journal -ErrorAction SilentlyContinue | Select-Object -Last 30
+          if ($p1.ExitCode -ne 0) { throw "Le fichier confié ne s'est pas ouvert dans la fenêtre (code $($p1.ExitCode))" }
+
       - name: Fabriquer l'installateur
         shell: pwsh
         run: |
@@ -66,6 +90,26 @@ jobs:
           & $iscc "/DVersion=1.0.${{ github.run_number }}" windows\installateur.iss
           if ($LASTEXITCODE -ne 0) { throw "Inno Setup a échoué" }
           Compress-Archive dist\MimPDF dist\MimPDF-portable.zip
+
+      - name: Vérifier l'installateur (« Ouvrir avec » déclaré, lecteur par défaut inchangé)
+        timeout-minutes: 10
+        shell: pwsh
+        run: |
+          $avant = (Get-ItemProperty "HKCU:\Software\Classes\.pdf" -ErrorAction SilentlyContinue)."(default)"
+          $p = Start-Process "dist\MimPDF-installation.exe" -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CURRENTUSER" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "L'installation a échoué (code $($p.ExitCode))" }
+          $commande = (Get-ItemProperty "HKCU:\Software\Classes\MimPDF.pdf\shell\open\command")."(default)"
+          "Commande « Ouvrir avec » : $commande"
+          if ($commande -notmatch 'MimPDF\.exe" "%1"$') { throw "Commande d'ouverture incorrecte" }
+          if ($null -eq (Get-ItemProperty "HKCU:\Software\Classes\.pdf\OpenWithProgids")."MimPDF.pdf") { throw "Mim PDF absent de « Ouvrir avec »" }
+          $apres = (Get-ItemProperty "HKCU:\Software\Classes\.pdf" -ErrorAction SilentlyContinue)."(default)"
+          if ($apres -ne $avant) { throw "L'installateur a changé le lecteur PDF par défaut ($avant -> $apres)" }
+          # La commande enregistrée, comme Windows la lance, avec le mode essai en plus
+          $exe = $commande.Split('"')[1]
+          $pdf = Join-Path $env:RUNNER_TEMP "Ma facture.pdf"
+          $p = Start-Process $exe -ArgumentList "--essai-fenetre", "`"$pdf`"" -Wait -PassThru
+          Get-Content "$env:LOCALAPPDATA\MimPDF\journal.txt" -ErrorAction SilentlyContinue | Select-Object -Last 30
+          if ($p.ExitCode -ne 0) { throw "L'application installée n'a pas ouvert le PDF (code $($p.ExitCode))" }
           Get-ChildItem dist\*.exe, dist\*.zip | Format-Table Name, @{n="Mo";e={[math]::Round($_.Length / 1MB, 1)}}
 
       - uses: actions/upload-artifact@v4

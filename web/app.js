@@ -634,6 +634,29 @@ async function versionBureau() {
 if (window.pywebview?.api?.mise_a_jour) versionBureau();
 else addEventListener("pywebviewready", versionBureau, { once: true });
 
+// Fichier ouvert depuis Windows (« Ouvrir avec Mim PDF », double-clic sur un PDF) : l'application
+// le garde en attente et appelle cette fonction ; on l'ouvre dès que le lecteur est prêt.
+let demandeEnCours = false, autreDemande = false;
+window.mimFichiersDemandes = async () => {
+  if (!ready || !window.pywebview?.api?.fichiers_demandes) return;
+  if (demandeEnCours) return void (autreDemande = true);
+  demandeEnCours = true;
+  try {
+    const f = (await window.pywebview.api.fichiers_demandes()).pop();  // un seul document à la fois : le dernier
+    if (!f) return;
+    if (doc?.history.length && !confirm(`Ouvrir « ${f.nom} » sans enregistrer les modifications de « ${doc.name}.pdf » ?`)) return;
+    const r = await fetch(f.url);
+    if (!r.ok) return say(`Impossible de lire « ${f.nom} ».`, true);
+    await openBytes(new Uint8Array(await r.arrayBuffer()), f.nom.replace(/\.pdf$/i, ""));
+  } catch (e) {
+    console.error(e); say("Erreur : " + (e.message || e), true);
+  } finally {
+    demandeEnCours = false;
+    if (autreDemande) { autreDemande = false; window.mimFichiersDemandes(); }
+  }
+};
+addEventListener("pywebviewready", () => window.mimFichiersDemandes(), { once: true });
+
 // ------------------------------------------------------------ démarrage
 
 setButtons(false);
@@ -642,6 +665,7 @@ try {
   core.init({ mupdf, PDFLib });
   ready = true;
   say("Ouvrez un PDF pour commencer.");
+  window.mimFichiersDemandes();
 } catch (e) {
   console.error(e);
   say("Le lecteur n'a pas pu se charger. Vérifiez votre connexion Internet puis rechargez la page.", true);

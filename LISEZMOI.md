@@ -42,6 +42,8 @@ Les commandes sont rangées dans des onglets, comme dans Word : **Fichier**, **A
 L'application affiche exactement la version en ligne, mais tout est inclus dans l'ordinateur : elle fonctionne **sans Internet**, reconnaissance de texte (OCR) en français comprise. Les fichiers sont enregistrés où vous le choisissez.
 **Mises à jour automatiques :** une fois installé, Mim PDF vérifie au démarrage (puis toutes les 6 heures) s'il existe une nouvelle version. Il la télécharge en arrière-plan, affiche un bandeau « Redémarrer et mettre à jour », et sinon l'installe tout seul quand vous le fermez. Vos réglages et votre signature enregistrée sont conservés.
 
+**Ouvrir un PDF directement :** clic droit sur un PDF > **Ouvrir avec** > **Mim PDF** (ou double-clic si vous avez choisi Mim PDF comme lecteur par défaut dans Windows). Si Mim PDF est déjà ouvert, le fichier s'ouvre dans la fenêtre existante. L'installation ne change pas votre lecteur PDF par défaut : pour l'utiliser à chaque double-clic, choisissez « Ouvrir avec » > « Choisir une autre application » > Mim PDF > « Toujours ».
+
 Vous aviez l'ancien « Lecteur PDF libre » ? Fermez-le, puis installez Mim PDF une fois avec le lien ci-dessus : il remplace l'ancienne version (et supprime ses fichiers devenus inutiles), puis se mettra à jour seul.
 
 Une version sans installation existe aussi : [MimPDF-portable.zip](https://github.com/Damien76690/lecteur-pdf/releases/latest/download/MimPDF-portable.zip) (décompressez, puis double-cliquez sur `MimPDF.exe`). Elle ne se met pas à jour toute seule.
