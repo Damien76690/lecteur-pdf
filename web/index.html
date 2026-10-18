@@ -43,7 +43,7 @@
   input[type=text] { font:inherit; padding:6px; border:1px solid var(--border); border-radius:6px; width:120px; }
   #goto { width:56px; } #count { color:var(--muted); padding:0 4px; white-space:nowrap; }
   input[type=number] { width:52px; padding:5px; border:1px solid var(--border); border-radius:6px; }
-  #msg { padding:8px 12px; color:var(--muted); min-height:34px; }
+  #msg { padding:8px 12px; color:var(--muted); min-height:34px; border-top:1px solid var(--border); background:var(--bg); }
   #msg.err { color:#b91c1c; }
   #pages { display:flex; flex-direction:column; align-items:center; gap:18px; padding:8px 12px 60px; }
   .page { position:relative; background:#fff; box-shadow:0 1px 4px rgba(0,0,0,.2); max-width:100%; touch-action:pan-y; }
@@ -348,8 +348,8 @@
   </div>
   <div id="doctabs" hidden></div>
   <div id="info" hidden></div>
+  <div id="msg">Chargement…</div>
 </header>
-<div id="msg">Chargement…</div>
 <div id="drop">
   Glissez un fichier PDF ici ou utilisez « Ouvrir un PDF ».<br>
   <strong>Vos fichiers restent sur votre ordinateur</strong> : rien n'est envoyé sur Internet.<br>
