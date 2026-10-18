@@ -54,9 +54,30 @@ function setBytes(bytes) {
   doc.mu = core.openMu(bytes);
   doc.pages = core.pageInfo(bytes);
   doc.annots = core.listAnnotations(bytes);
+  doc.outline = core.outline(doc.mu);
   doc.version++;
+  found = null; $("#find-count").textContent = "";
   render();
   refreshList();
+  refreshSide();
+}
+
+function setTitle(text) {
+  document.title = text;
+  window.pywebview?.api?.titre?.(text);
+}
+
+const plural = (n, word) => `${n} ${word}${n > 1 ? "s" : ""}`;
+
+// Bandeau d'information : document signé électroniquement, champs de formulaire.
+function showInfo() {
+  const parts = [];
+  if (doc.signed) parts.push(core.keepsOriginal(doc.original, doc.bytes)
+    ? "🔏 Ce document est signé électroniquement. Vos commentaires, surlignages et signatures sont ajoutés sans toucher à la signature d'origine."
+    : "⚠ Ce document était signé électroniquement : vos modifications rendent cette signature invalide dans la copie enregistrée (le fichier d'origine n'est pas touché).");
+  if (doc.fields) parts.push(`Ce document contient ${plural(doc.fields, "champ")} de formulaire.`);
+  $("#info").textContent = parts.join(" ");
+  $("#info").hidden = !parts.length;
 }
 
 async function openBytes(bytes, name) {
@@ -64,13 +85,18 @@ async function openBytes(bytes, name) {
   await busy("Ouverture…", async () => {
     try { core.pageInfo(bytes); } catch { throw new Error("ce fichier n'est pas un PDF lisible"); }
     doc?.mu?.destroy();
-    doc = { name, history: [], future: [], version: 0 };
+    doc = { name, history: [], future: [], version: 0, original: bytes, signed: core.isSigned(bytes) };
     current = 0;
     setBytes(bytes);
+    doc.fields = core.formFields(doc.mu);
     $("#drop").hidden = true;
     $("#docname").textContent = name + ".pdf";
+    setTitle(name + ".pdf – Mim PDF");
+    $("#find").value = "";
+    showInfo();
+    if (innerWidth > 900) openSide(doc.outline.length ? "outline" : "thumbs");
   });
-  if (doc) say(`${doc.name} : ${doc.pages.length} page(s).` + (core.needsOcr(doc.pages)
+  if (doc) say(`${doc.name} : ${plural(doc.pages.length, "page")}.` + (core.needsOcr(doc.pages)
     ? " Ce PDF semble être une image (scan) : cliquez sur « Reconnaître le texte (OCR) » pour pouvoir le modifier ou le convertir." : ""));
 }
 
@@ -90,7 +116,10 @@ async function edit(message, fn, done) {
     if (doc.history.length > MAX_UNDO) doc.history.shift();
     doc.future = [];
     setBytes(after);
-    say(typeof done === "function" ? done() : done);
+    const broke = doc.signed && core.keepsOriginal(doc.original, before) && !core.keepsOriginal(doc.original, after);
+    say((typeof done === "function" ? done() : done) +
+        (broke ? " Attention : cette modification rend la signature électronique invalide dans la copie (Ctrl+Z pour annuler)." : ""));
+    showInfo();
   });
 }
 
@@ -116,12 +145,33 @@ function drawPage(div) {
   const url = URL.createObjectURL(new Blob([core.renderPage(doc.mu, i, res)], { type: "image/png" }));
   if (img.src) URL.revokeObjectURL(img.src);
   img.src = url; img.dataset.key = key;
+  div.style.setProperty("--k", scale);
+  if (!div.querySelector(".tl")) div.appendChild(textLayer(i));
+}
+
+// Calque de texte transparent : chaque ligne est placée et étirée exactement sur le texte
+// de l'image, si bien que la souris sélectionne et copie le vrai texte (Ctrl+C).
+const measure = document.createElement("canvas").getContext("2d");
+function textLayer(i) {
+  const p = doc.pages[i], tl = document.createElement("div");
+  tl.className = "tl";
+  for (const l of core.pageText(doc.mu, i)) {
+    const span = document.createElement("span"), family = /serif/.test(l.family) && !/sans/.test(l.family) ? "serif" : "sans-serif";
+    span.textContent = l.text;
+    measure.font = `${l.size}px ${family}`;
+    const natural = measure.measureText(l.text).width;
+    Object.assign(span.style, { left: 100 * l.x / p.w + "%", top: 100 * l.y / p.h + "%", fontFamily: family,
+      fontSize: `calc(var(--k) * ${l.size}px)`, transform: natural > 0 ? `scaleX(${l.w / natural})` : "" });
+    tl.appendChild(span);
+  }
+  return tl;
 }
 
 function layout() {
   $$("#pages .page").forEach(div => {
-    const p = doc.pages[+div.dataset.index];
-    div.style.width = Math.round(p.w * scaleFor(p)) + "px";
+    const p = doc.pages[+div.dataset.index], scale = scaleFor(p);
+    div.style.width = Math.round(p.w * scale) + "px";
+    div.style.setProperty("--k", scale);
   });
   $$("#pages .page").filter(visible).forEach(drawPage);
 }
@@ -161,7 +211,7 @@ function trackCurrent() {
     const r = div.getBoundingClientRect(), d = r.top > mid ? r.top - mid : r.bottom < mid ? mid - r.bottom : 0;
     if (d < dist) { dist = d; best = i; }
   });
-  current = best;
+  if (best !== current) { current = best; markSide(); }
   if (document.activeElement !== $("#goto")) $("#goto").value = current + 1;
 }
 
@@ -195,6 +245,141 @@ function render() {
   $("#goto").max = doc.pages.length;
   $("#count").textContent = "/ " + doc.pages.length;
   trackCurrent();
+  paintHits();
+}
+
+// ------------------------------------------------------------ rechercher
+
+let found = null;             // { query, hits: [{ page, rects }], at }
+async function find(dir = 1) {
+  if (!doc) return;
+  const query = $("#find").value.trim();
+  if (!query) { found = null; paintHits(); $("#find-count").textContent = ""; return; }
+  if (found?.query !== query) {
+    found = { query, hits: [], at: -1 };
+    for (let i = 0; i < doc.pages.length; i++) {
+      for (const rects of core.search(doc.mu, i, query)) found.hits.push({ page: i, rects });
+      if (i % 10 === 9) { $("#find-count").textContent = `page ${i + 1}…`; await new Promise(r => setTimeout(r)); }
+      if (found?.query !== query) return;       // nouvelle recherche lancée entre-temps
+    }
+    // On part de la page affichée.
+    const first = found.hits.findIndex(h => h.page >= current);
+    found.at = (first < 0 ? 0 : first) - (dir > 0 ? 1 : 0);
+  }
+  const n = found.hits.length;
+  if (!n) { $("#find-count").textContent = "0 résultat"; paintHits(); return say(`« ${query} » est introuvable dans ce document.`, true); }
+  found.at = ((found.at + dir) % n + n) % n;
+  $("#find-count").textContent = `${found.at + 1} / ${n}`;
+  paintHits();
+  $(".hit.cur")?.scrollIntoView({ block: "center", behavior: "smooth" });
+}
+
+function paintHits() {
+  $$("#pages .hit").forEach(h => h.remove());
+  if (!found) return;
+  const pages = $$("#pages .page");
+  found.hits.forEach((h, k) => {
+    const p = doc.pages[h.page];
+    for (const [x0, y0, x1, y1] of h.rects) {
+      const d = document.createElement("div");
+      d.className = "hit" + (k === found.at ? " cur" : "");
+      Object.assign(d.style, { left: 100 * x0 / p.w + "%", top: 100 * y0 / p.h + "%",
+                               width: 100 * (x1 - x0) / p.w + "%", height: 100 * (y1 - y0) / p.h + "%" });
+      pages[h.page]?.appendChild(d);
+    }
+  });
+}
+
+// ------------------------------------------------------------ panneau : signets et pages en miniature
+
+let sideTab = "outline";
+const thumbObserver = new IntersectionObserver(entries => {
+  for (const e of entries) if (e.isIntersecting) drawThumb(e.target);
+}, { root: $("#thumbs"), rootMargin: "300px" });
+
+function drawThumb(b) {
+  const i = +b.dataset.index, img = b.querySelector("img"), key = String(doc.version);
+  if (img.dataset.key === key) return;
+  const zoom = 120 / doc.pages[i].w * (window.devicePixelRatio || 1);
+  if (img.src) URL.revokeObjectURL(img.src);
+  img.src = URL.createObjectURL(new Blob([core.renderPage(doc.mu, i, zoom)], { type: "image/png" }));
+  img.dataset.key = key;
+}
+
+function refreshSide() {
+  if (!doc || $("#side").hidden) return;
+  const out = $("#outline");
+  out.innerHTML = "";
+  if (!doc.outline.length) out.innerHTML = '<div class="empty">Ce document n\'a pas de signets. Utilisez l\'onglet « Pages ».</div>';
+  doc.outline.forEach((o, k) => {
+    const b = document.createElement("button");
+    b.textContent = o.title; b.style.paddingLeft = 8 + 14 * o.level + "px"; b.dataset.k = k;
+    b.title = o.page >= 0 ? `Page ${o.page + 1}` : "";
+    b.onclick = () => o.page >= 0 && goTo(o.page);
+    out.appendChild(b);
+  });
+  const thumbs = $("#thumbs");
+  thumbObserver.disconnect();
+  $$("#thumbs img").forEach(img => img.src && URL.revokeObjectURL(img.src));
+  thumbs.innerHTML = "";
+  doc.pages.forEach((p, i) => {
+    const b = document.createElement("button");
+    b.dataset.index = i;
+    b.innerHTML = `<img alt="" style="aspect-ratio:${p.w} / ${p.h}"><span>${i + 1}</span>`;
+    b.onclick = () => goTo(i);
+    thumbs.appendChild(b);
+    thumbObserver.observe(b);
+  });
+  markSide();
+}
+
+// Met en évidence la page affichée dans le panneau.
+function markSide() {
+  if (!doc || $("#side").hidden) return;
+  $$("#thumbs button").forEach((b, i) => b.classList.toggle("cur", i === current));
+  if (sideTab === "thumbs") $("#thumbs button.cur")?.scrollIntoView({ block: "nearest" });
+  let k = -1;
+  doc.outline.forEach((o, j) => { if (o.page >= 0 && o.page <= current) k = j; });
+  $$("#outline button").forEach((b, j) => b.classList.toggle("cur", j === k));
+}
+
+function openSide(tab = sideTab) {
+  sideTab = tab;
+  $$("[data-side]").forEach(b => b.classList.toggle("on", b.dataset.side === tab));
+  $("#outline").hidden = tab !== "outline";
+  $("#thumbs").hidden = tab !== "thumbs";
+  const wasHidden = $("#side").hidden;
+  $("#side").hidden = false;
+  if (wasHidden) { refreshSide(); if (doc && typeof zoom !== "number") layout(); }
+  else markSide();
+}
+function closeSide() {
+  $("#side").hidden = true;
+  thumbObserver.disconnect();
+  if (doc && typeof zoom !== "number") layout();
+}
+
+// ------------------------------------------------------------ imprimer
+
+// Chaque page est rendue en haute définition (180 dpi) puis Windows / le navigateur imprime.
+async function printDoc() {
+  if (!doc) return;
+  const box = $("#print");
+  const ok = await busy("Préparation de l'impression…", async () => {
+    box.innerHTML = "";
+    for (let i = 0; i < doc.pages.length; i++) {
+      say(`Préparation de l'impression : page ${i + 1} / ${doc.pages.length}…`);
+      const img = new Image();
+      img.src = URL.createObjectURL(new Blob([core.renderPage(doc.mu, i, 2.5)], { type: "image/png" }));
+      box.appendChild(img);
+      await img.decode();
+    }
+    return true;
+  });
+  if (!ok) return;
+  say("Impression lancée.");
+  window.print();
+  setTimeout(() => { $$("#print img").forEach(img => URL.revokeObjectURL(img.src)); box.innerHTML = ""; }, 1000);
 }
 
 const rotate = (i, angle) => edit("Rotation…", b => core.rotatePage(b, i, angle), `Page ${i + 1} pivotée.`);
@@ -506,7 +691,13 @@ async function save(fmt) {
   };
   await busy(fmt === "pdf" ? "Enregistrement…" : "Conversion en cours…", async () => {
     let done;
-    if (fmt === "pdf") done = await download(doc.bytes, `${doc.name}-modifie.pdf`, "application/pdf");
+    if (fmt === "pdf") {
+      const kept = !doc.signed || core.keepsOriginal(doc.original, doc.bytes);
+      if (!kept && !confirm("Ce document était signé électroniquement. La copie enregistrée ne sera plus considérée comme signée " +
+                            "(le fichier d'origine reste intact). Enregistrer quand même ?")) return say("Enregistrement annulé.");
+      done = await download(doc.bytes, `${doc.name}-modifie.pdf`, "application/pdf");
+      if (doc.signed && kept && done && !/annulé/.test(done)) done += " La signature électronique d'origine reste valable.";
+    }
     if (fmt === "txt") done = await download(core.toText(rows()), `${doc.name}.txt`, "text/plain;charset=utf-8");
     if (fmt === "xlsx") {
       await loadScript(LIBS.xlsx);
@@ -587,6 +778,8 @@ $("#close").onclick = () => {
   $$("#pages .page img").forEach(img => img.src && URL.revokeObjectURL(img.src));
   $("#pages").innerHTML = ""; doc.mu?.destroy(); doc = null; $("#list").hidden = true;
   $("#drop").hidden = false; $("#docname").textContent = ""; $("#count").textContent = "/ 0";
+  $("#info").hidden = true; closeSide(); found = null; $("#find").value = ""; $("#find-count").textContent = "";
+  setTitle("Mim PDF");
   setButtons(false); say("Ouvrez un PDF pour commencer.");
 };
 let scrolling = 0;
@@ -594,14 +787,29 @@ addEventListener("scroll", () => { cancelAnimationFrame(scrolling); scrolling = 
 let resizing = 0;
 addEventListener("resize", () => { clearTimeout(resizing); resizing = setTimeout(() => doc && typeof zoom !== "number" && layout(), 150); });
 document.addEventListener("keydown", e => {
-  if (e.target.matches("input, textarea, select") && e.key !== "Escape") return;
   const ctrl = e.ctrlKey || e.metaKey, k = e.key.toLowerCase();
+  if (ctrl && k === "f") {
+    e.preventDefault();
+    $('[data-tab="accueil"]').click(); $("#find").focus(); $("#find").select();
+    return;
+  }
+  if (ctrl && k === "p") { e.preventDefault(); printDoc(); return; }
+  if (e.key === "F3") { e.preventDefault(); find(e.shiftKey ? -1 : 1); return; }
+  if (e.target.matches("input, textarea, select") && e.key !== "Escape") return;
   if (ctrl && k === "z" && !e.shiftKey) { e.preventDefault(); undo(); }
   else if (ctrl && (k === "y" || (k === "z" && e.shiftKey))) { e.preventDefault(); redo(); }
   else if (ctrl && k === "s" && doc) { e.preventDefault(); save("pdf"); }
   else if (ctrl && k === "o") { e.preventDefault(); $("#file").click(); }
   else if (e.key === "Escape") setMode("read");
 });
+$("#find").onkeydown = e => { if (e.key === "Enter") { e.preventDefault(); find(e.shiftKey ? -1 : 1); } };
+$("#find").oninput = () => { if (!$("#find").value.trim()) find(); };
+$("#find-next").onclick = () => find(1);
+$("#find-prev").onclick = () => find(-1);
+$$("[data-print]").forEach(b => b.onclick = printDoc);
+$("#side-toggle").onclick = () => $("#side").hidden ? openSide() : closeSide();
+$("#side-close").onclick = closeSide;
+$$("[data-side]").forEach(b => b.onclick = () => openSide(b.dataset.side));
 $("#ocr").onclick = () => edit("Reconnaissance du texte…", ocr,
   "Texte reconnu : le PDF est maintenant sélectionnable et convertible. Vérifiez les chiffres importants.");
 $$("[data-dl]").forEach(b => b.onclick = () => save(b.dataset.dl));
@@ -659,6 +867,7 @@ addEventListener("pywebviewready", () => window.mimFichiersDemandes(), { once: t
 
 // ------------------------------------------------------------ démarrage
 
+document.body.className = "mode-read";
 setButtons(false);
 try {
   const [mupdf] = await Promise.all([import(LIBS.mupdf), loadScript(LIBS.pdflib)]);

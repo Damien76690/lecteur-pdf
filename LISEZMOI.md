@@ -20,7 +20,10 @@ Les commandes sont rangées dans des onglets, comme dans Word : **Fichier**, **A
 
 | Fonction | Où |
 |---|---|
-| Ouvrir, enregistrer, fermer | **Fichier** ou **Accueil** (Ctrl+O, Ctrl+S) |
+| Ouvrir, enregistrer, imprimer, fermer | **Fichier** ou **Accueil** (Ctrl+O, Ctrl+S, Ctrl+P) |
+| Rechercher un mot dans tout le document | **Accueil › Rechercher** (Ctrl+F, puis Entrée ou F3 pour l'occurrence suivante, Maj+Entrée pour la précédente) ; majuscules et accents ignorés |
+| Signets du PDF, pages en miniature | **Accueil › Panneau** : onglets **Signets** et **Pages**, cliquez pour y aller |
+| Copier du texte | En mode Lecture, sélectionnez le texte à la souris puis Ctrl+C |
 | Annuler, rétablir | **Accueil** (Ctrl+Z, Ctrl+Y) |
 | Zoom, largeur de page, page entière, aller à une page | **Accueil** |
 | Surligner, souligner, barrer du texte | **Commenter**, puis faites glisser sur le texte |
@@ -32,6 +35,8 @@ Les commandes sont rangées dans des onglets, comme dans Word : **Fichier**, **A
 | PDF scanné → texte | **Modifier › Reconnaître le texte** : le PDF devient sélectionnable, modifiable et convertible |
 | Pivoter, supprimer une page | **Pages**, ou boutons ⟳ et 🗑 en haut à droite de chaque page |
 | Convertir | **Convertir** : Word, Excel, Texte ou PDF |
+
+**PDF signés électroniquement (Docusign, certificat…)** : un bandeau le signale à l'ouverture. Les commentaires, surlignages, tampons et signatures image sont ajoutés à la suite du fichier, sans toucher aux octets signés : la signature d'origine reste valable. Les autres modifications (rotation, suppression de page, texte écrit, OCR…) l'invalident dans la copie : Mim PDF prévient avant d'enregistrer.
 
 ## Application Windows (le plus simple)
 

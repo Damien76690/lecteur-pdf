@@ -275,6 +275,11 @@ class Api:
             return {"message": "Installation de la mise à jour…"}
         return {"message": "Aucune mise à jour à installer."}
 
+    def titre(self, texte):
+        """Nom du document ouvert dans la barre de titre de Windows."""
+        if self._window:
+            self._window.set_title(texte)
+
     def enregistrer(self, nom, contenu_base64):
         import webview
         fmt = nom.rsplit(".", 1)[-1].lower()
