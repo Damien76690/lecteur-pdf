@@ -7,16 +7,22 @@ Préparation :  npm ci && npm run build -- build/site      puis  pip install -r 
 Lancement :  python bureau.py
 Vérification sans fenêtre :  python bureau.py --verifier
 Essai de la fenêtre (ouvre la facture d'exemple puis se ferme seule) :  python bureau.py --essai-fenetre
+Ouvrir un PDF directement (« Ouvrir avec » de Windows) :  python bureau.py chemin\\du\\fichier.pdf
 C'est ce fichier que l'application Windows (MimPDF.exe) exécute.
 
 Mise à jour automatique : au lancement puis toutes les 6 heures, l'application installée regarde
 la dernière version publiée sur GitHub (Releases), télécharge son installateur en arrière-plan,
 propose de redémarrer et, sinon, l'installe sans rien demander quand on ferme la fenêtre.
+
+Ouverture d'un fichier : Windows lance  MimPDF.exe "fichier.pdf". Si Mim PDF est déjà ouvert, ce
+second lancement confie le fichier à la fenêtre existante (par son serveur local, avec un jeton
+secret écrit dans instance.json) puis se ferme ; sinon le fichier s'ouvre dans la nouvelle fenêtre.
 """
 import base64
 import functools
 import json
 import os
+import secrets
 import subprocess
 import sys
 import threading
@@ -28,6 +34,7 @@ SITE = os.path.join(getattr(sys, "_MEIPASS", ICI), "site") if hasattr(sys, "_MEI
     else os.path.join(ICI, "build", "site")
 DONNEES = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "MimPDF")
 JOURNAL = os.path.join(DONNEES, "journal.txt")
+INSTANCE = os.path.join(DONNEES, "instance.json")  # port et jeton de la fenêtre ouverte
 DEPOT = "Damien76690/lecteur-pdf"
 INSTALLATEUR = "MimPDF-installation.exe"
 VERROU = "MimPDF"  # l'installateur attend que ce verrou disparaisse (fenêtre fermée) avant de remplacer les fichiers
@@ -40,8 +47,16 @@ FILTRES = {
 }
 
 
+JETON = secrets.token_urlsafe(24)
+FICHIERS = {}       # adresse secrète -> chemin d'un PDF à ouvrir (voir Api.recevoir)
+RECEVOIR = None     # fonction appelée quand un autre lancement nous confie un fichier
+
+
 class Pages(SimpleHTTPRequestHandler):
-    """Sert le site sur 127.0.0.1 uniquement (rien n'est accessible depuis le réseau)."""
+    """Sert le site sur 127.0.0.1 uniquement (rien n'est accessible depuis le réseau).
+
+    En plus du site : /_fichier/<code> renvoie un PDF demandé, et POST /_ouvrir reçoit le
+    chemin d'un fichier d'un second lancement (refusé sans le jeton d'instance.json)."""
     extensions_map = {**SimpleHTTPRequestHandler.extensions_map,
                       ".js": "text/javascript", ".mjs": "text/javascript", ".wasm": "application/wasm",
                       ".gz": "application/gzip"}
@@ -53,6 +68,38 @@ class Pages(SimpleHTTPRequestHandler):
     def log_message(self, *args):
         pass
 
+    def do_GET(self):
+        if self.path.startswith("/_fichier/"):
+            chemin = FICHIERS.get(self.path[len("/_fichier/"):])
+            try:
+                with open(chemin, "rb") as f:  # lu d'un coup : le fichier n'est pas verrouillé ensuite
+                    contenu = f.read()
+            except (OSError, TypeError):
+                return self.send_error(404)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/pdf")
+            self.send_header("Content-Length", str(len(contenu)))
+            self.end_headers()
+            self.wfile.write(contenu)
+            return
+        super().do_GET()
+
+    def do_POST(self):
+        if self.path != "/_ouvrir":
+            return self.send_error(404)
+        try:
+            demande = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
+            ok = demande.get("jeton") == JETON and RECEVOIR and os.path.isfile(demande.get("chemin", ""))
+        except (ValueError, AttributeError):
+            ok = False
+        if not ok:
+            return self.send_error(403)
+        RECEVOIR(demande["chemin"])
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(json.dumps({"pid": os.getpid()}).encode())
+
 
 def demarrer_serveur():
     if not os.path.isfile(os.path.join(SITE, "index.html")):
@@ -60,6 +107,54 @@ def demarrer_serveur():
     serveur = ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(Pages, directory=SITE))
     threading.Thread(target=serveur.serve_forever, daemon=True).start()
     return f"http://127.0.0.1:{serveur.server_address[1]}/"
+
+
+def fichier_demande(arguments):
+    """Le fichier passé par Windows (« Ouvrir avec », double-clic), s'il y en a un."""
+    for a in arguments:
+        if not a.startswith("--") and os.path.isfile(a):
+            return os.path.abspath(a)
+    return None
+
+
+def annoncer_instance(url):
+    os.makedirs(DONNEES, exist_ok=True)
+    with open(INSTANCE, "w", encoding="utf-8") as f:
+        json.dump({"url": url, "jeton": JETON, "pid": os.getpid()}, f)
+
+
+def oublier_instance():
+    try:
+        with open(INSTANCE, encoding="utf-8") as f:
+            if json.load(f).get("jeton") != JETON:
+                return  # une autre fenêtre ouverte depuis a pris le relais
+        os.remove(INSTANCE)
+    except (OSError, ValueError):
+        pass
+
+
+def confier_a_la_fenetre_ouverte(chemin):
+    """Si Mim PDF est déjà ouvert, lui confie le fichier et le met au premier plan. Vrai si c'est fait."""
+    try:
+        with open(INSTANCE, encoding="utf-8") as f:
+            instance = json.load(f)
+        demande = urllib.request.Request(instance["url"] + "_ouvrir", method="POST",
+                                         data=json.dumps({"jeton": instance["jeton"], "chemin": chemin}).encode(),
+                                         headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(demande, timeout=10) as r:
+            if r.status != 200:
+                return False
+    except Exception:  # aucune fenêtre ouverte (ou elle ne répond pas) : on en ouvre une nouvelle
+        return False
+    if sys.platform == "win32":
+        import ctypes
+        user32 = ctypes.windll.user32
+        fenetre = user32.FindWindowW(None, "Mim PDF")
+        if fenetre:
+            if user32.IsIconic(fenetre):
+                user32.ShowWindow(fenetre, 9)  # SW_RESTORE
+            user32.SetForegroundWindow(fenetre)
+    return True
 
 
 def version_installee():
@@ -150,6 +245,23 @@ class Api:
     def __init__(self):
         self._window = None
         self._maj = None
+        self._demandes = []   # fichiers à ouvrir : {"url": ..., "nom": ...}
+
+    def recevoir(self, chemin):
+        """Met un fichier en attente et prévient la page (qui l'ouvre dès que le lecteur est prêt)."""
+        code = secrets.token_urlsafe(16)
+        FICHIERS[code] = chemin
+        self._demandes.append({"url": "/_fichier/" + code, "nom": os.path.basename(chemin)})
+        print("Fichier à ouvrir :", chemin, flush=True)
+        if self._window:
+            try:
+                self._window.evaluate_js("window.mimFichiersDemandes && window.mimFichiersDemandes()")
+            except Exception as e:  # page pas encore chargée : elle les demandera elle-même
+                print("Annonce du fichier :", repr(e), flush=True)
+
+    def fichiers_demandes(self):
+        demandes, self._demandes = self._demandes, []
+        return demandes
 
     def mise_a_jour(self):
         """Version prête à installer (ou None), et version actuelle."""
@@ -209,10 +321,22 @@ def garde_fou(secondes):
 
 
 def main():
+    global RECEVOIR
+    fichier = fichier_demande(sys.argv[1:])
+    automatique = "--verifier" in sys.argv or any(a.startswith("--essai") for a in sys.argv)
+    if sys.platform == "win32" and not automatique:
+        import ctypes
+        verrou = ctypes.windll.kernel32.CreateMutexW(None, False, VERROU)  # noqa: F841 (gardé ouvert)
+        deja_ouvert = ctypes.windll.kernel32.GetLastError() == 183  # ERROR_ALREADY_EXISTS
+        if fichier and deja_ouvert and confier_a_la_fenetre_ouverte(fichier):
+            return
+    elif fichier and "--essai-second" in sys.argv:  # essai automatique du second lancement
+        sys.exit(0 if confier_a_la_fenetre_ouverte(fichier) else 4)
+
     if sys.stdout is None:  # application sans console : messages dans journal.txt
         os.makedirs(os.path.dirname(JOURNAL), exist_ok=True)
         sys.stdout = sys.stderr = open(JOURNAL, "w", encoding="utf-8", buffering=1)
-    if "--verifier" in sys.argv or "--essai-fenetre" in sys.argv:
+    if automatique:
         garde_fou(240)
     if "--verifier" in sys.argv:
         try:
@@ -223,13 +347,18 @@ def main():
         return
 
     import webview
-    if sys.platform == "win32":
+    if sys.platform == "win32" and automatique:
         import ctypes
         verrou = ctypes.windll.kernel32.CreateMutexW(None, False, VERROU)  # noqa: F841 (gardé ouvert)
     api = Api()
-    api._window = webview.create_window("Mim PDF", demarrer_serveur(),
+    url = demarrer_serveur()
+    if fichier:
+        api.recevoir(fichier)
+    api._window = webview.create_window("Mim PDF", url,
                                        js_api=api, width=1280, height=860, min_size=(800, 500))
-    if MiseAJour.active() and "--essai-fenetre" not in sys.argv:
+    RECEVOIR = api.recevoir
+    annoncer_instance(url)
+    if MiseAJour.active() and not automatique:
         api._maj = MiseAJour(version_installee())
 
         def annoncer(version):
@@ -260,8 +389,16 @@ def main():
             print("Fenêtre ouverte, attente du lecteur…", flush=True)
             try:
                 # Le lecteur (MuPDF) doit se charger sans Internet, puis ouvrir la facture d'exemple.
-                if attendre(window, "!!(window.pywebview && window.pywebview.api && window.pywebview.api.enregistrer)"
-                                    " && /Ouvrez un PDF/.test(document.querySelector('#msg').textContent)"):
+                # Avec un fichier (« Ouvrir avec ») ou --attendre=nom.pdf (fichier confié par un second
+                # lancement --essai-second), c'est lui qui doit s'ouvrir tout seul.
+                attendu = os.path.basename(fichier) if fichier else next(
+                    (a.split("=", 1)[1] for a in sys.argv if a.startswith("--attendre=")), None)
+                if attendu:
+                    resultat["ok"] = attendre(window, f"document.querySelector('#docname').textContent === {json.dumps(attendu)}"
+                                                      " && document.querySelectorAll('#pages .page img[src]').length > 0", 150)
+                    print("Fichier ouvert :", attendu if resultat["ok"] else "non", flush=True)
+                elif attendre(window, "!!(window.pywebview && window.pywebview.api && window.pywebview.api.enregistrer)"
+                                      " && /Ouvrez un PDF/.test(document.querySelector('#msg').textContent)"):
                     window.evaluate_js("document.querySelector('[data-sample=facture]').click()")
                     resultat["ok"] = attendre(window, "document.querySelectorAll('#pages .page img[src]').length > 0")
             except Exception as e:
@@ -270,6 +407,7 @@ def main():
                 window.destroy()
 
     webview.start(essai, api._window, gui="edgechromium" if sys.platform == "win32" else None)
+    oublier_instance()
     if api._maj:  # mise à jour téléchargée mais pas encore installée : on l'installe en partant
         api._maj.installer(relancer=False)
     if essai:
