@@ -109,3 +109,54 @@ test("signature image posée sur la page", () => {
   assert.equal(sig.text, "Signature");
   assert.ok(sig.bounds[0] >= 349 && sig.bounds[2] <= 501);
 });
+
+// ------------------------------------------------------------ lecture
+
+const open = bytes => mupdf.Document.openDocument(bytes, "application/pdf");
+
+test("rechercher sans tenir compte des majuscules ni des accents", () => {
+  const d = open(facture());
+  assert.equal(core.search(d, 0, "papier").length, 1);
+  assert.equal(core.search(d, 0, "societe dupont").length, 1);
+  assert.deepEqual(core.search(d, 0, "   "), []);
+  const [[r]] = core.search(d, 0, "Papier");
+  assert.ok(r[0] < r[2] && r[1] < r[3], "rectangle de l'occurrence");
+});
+
+test("le texte de la page est disponible pour être sélectionné", () => {
+  const lines = core.pageText(open(facture()), 0);
+  const title = lines.find(l => l.text.startsWith("Facture n°"));
+  assert.ok(title && title.w > 50 && title.size === 20);
+});
+
+test("signets du document", () => {
+  const d = open(facture());
+  const it = d.outlineIterator();
+  it.insert({ title: "Facture", uri: "#page=1", open: true });
+  const bytes = d.saveToBuffer("").asUint8Array().slice();
+  assert.deepEqual(core.outline(open(bytes)), [{ title: "Facture", page: 0, level: 0 }]);
+  assert.deepEqual(core.outline(open(facture())), []);
+});
+
+// PDF portant une signature électronique (structure /Sig avec /ByteRange, comme Docusign).
+async function signedPdf() {
+  const d = await PDFLib.PDFDocument.load(facture());
+  d.context.register(d.context.obj({ Type: "Sig", Filter: "Adobe.PPKLite", ByteRange: [0, 10, 20, 30],
+    Contents: PDFLib.PDFHexString.of("00") }));
+  return d.save({ useObjectStreams: false });
+}
+
+test("un PDF signé garde sa signature quand on le commente", async () => {
+  const signed = await signedPdf();
+  assert.ok(core.isSigned(signed));
+  assert.ok(!core.isSigned(facture()));
+  const commented = core.annotate(signed, 0, { kind: "note", at: [400, 300], text: "Vu" });
+  assert.ok(core.keepsOriginal(signed, commented), "enregistrement à la suite du fichier signé");
+  assert.equal(core.listAnnotations(commented).length, 1);
+  const rotated = await core.rotatePage(signed, 0);
+  assert.ok(!core.keepsOriginal(signed, rotated), "une rotation réécrit le fichier");
+});
+
+test("aucun champ de formulaire dans la facture", () => {
+  assert.equal(core.formFields(open(facture())), 0);
+});

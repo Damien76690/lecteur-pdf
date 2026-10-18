@@ -23,7 +23,12 @@ function openMu(bytes) {
   return mupdf.Document.openDocument(bytes, "application/pdf");
 }
 
-function saveMu(doc) {
+// Un PDF signé électroniquement est enregistré « à la suite » (incrémental) : les octets
+// signés restent identiques, la signature d'origine reste donc valable.
+function saveMu(doc, bytes) {
+  if (bytes && isSigned(bytes)) {
+    try { return doc.saveToBuffer("incremental").asUint8Array().slice(); } catch {}
+  }
   return doc.saveToBuffer("garbage=compact,compress").asUint8Array().slice();
 }
 
@@ -83,6 +88,68 @@ export function renderPage(doc, index, zoom) {
 
 export { openMu };
 
+// ------------------------------------------------------------ lecture : signets, recherche, texte
+
+// Signets du PDF à plat : [{ title, page, level }] (page = -1 si le signet ne mène à aucune page).
+export function outline(doc) {
+  const out = [];
+  const walk = (items, level) => {
+    for (const it of items || []) {
+      let page = it.page ?? -1;
+      if (page < 0 && it.uri) try { page = doc.resolveLink(it.uri); } catch {}
+      out.push({ title: (it.title || "").replace(/\s+/g, " ").trim() || "(sans titre)", page, level });
+      walk(it.down, level + 1);
+    }
+  };
+  try { walk(doc.loadOutline(), 0); } catch {}
+  return out;
+}
+
+// Occurrences de `needle` sur une page, sans tenir compte des majuscules ni des accents :
+// [[x0, y0, x1, y1], …] par occurrence (plusieurs rectangles si elle passe à la ligne).
+export function search(doc, index, needle) {
+  if (!needle.trim()) return [];
+  const page = doc.loadPage(index);
+  try {
+    return page.search(needle, "ignore-case,ignore-diacritics").map(quads => quads.map(q =>
+      [Math.min(q[0], q[4]), Math.min(q[1], q[3]), Math.max(q[2], q[6]), Math.max(q[5], q[7])]));
+  } finally { page.destroy(); }
+}
+
+// Lignes de texte d'une page avec leur position, pour pouvoir les sélectionner et les copier.
+export function pageText(doc, index) {
+  const page = doc.loadPage(index);
+  try {
+    return textLines(page).filter(l => !l.wmode).map(l => ({
+      text: l.text, x: l.bbox.x, y: l.bbox.y, w: l.bbox.w, h: l.bbox.h, size: l.font.size, family: l.font.family }));
+  } finally { page.destroy(); }
+}
+
+// Signature électronique présente (Docusign, certificat…) ?
+const latin1 = new TextDecoder("latin1");
+export function isSigned(bytes) {
+  return /\/ByteRange\s*\[/.test(latin1.decode(bytes));
+}
+
+// Vrai si `bytes` commence par les octets de `original` (enregistrement incrémental) :
+// dans ce cas une signature d'origine est toujours valable.
+export function keepsOriginal(original, bytes) {
+  if (bytes.length < original.length) return false;
+  for (let i = 0; i < original.length; i++) if (bytes[i] !== original[i]) return false;
+  return true;
+}
+
+// Nombre de champs de formulaire à remplir (hors champs de signature).
+export function formFields(doc) {
+  let n = 0;
+  for (let i = 0; i < doc.countPages(); i++) {
+    const page = doc.loadPage(i);
+    try { if (page.getWidgets) n += page.getWidgets().filter(w => w.getFieldType() !== "signature").length; }
+    finally { page.destroy(); }
+  }
+  return n;
+}
+
 // Transformation affichage -> espace PDF et rotation de chaque page.
 function geometry(bytes) {
   return withMu(bytes, doc => {
@@ -127,7 +194,7 @@ export function whiteout(bytes, index, x0, y0, x1, y1) {
     redact(page, [[Math.min(x0, x1), Math.min(y0, y1), Math.max(x0, x1), Math.max(y0, y1)]],
            { images: true, lineArt: true });
     page.destroy();
-    return saveMu(doc);
+    return saveMu(doc, bytes);
   });
 }
 
@@ -164,7 +231,7 @@ export async function replaceText(bytes, old, neu) {
       }
       page.destroy();
     }
-    return writes.length ? saveMu(doc) : bytes;
+    return writes.length ? saveMu(doc, bytes) : bytes;
   });
   if (!writes.length || !neu) return { bytes: cleaned, count: writes.length };
   const geo = geometry(cleaned);
@@ -305,7 +372,7 @@ export function annotate(bytes, index, spec) {
         default: throw new Error("type d'annotation inconnu : " + spec.kind);
       }
       a.update();
-      return saveMu(doc);
+      return saveMu(doc, bytes);
     } finally { page.destroy(); }
   });
 }
@@ -336,7 +403,7 @@ function withAnnotation(bytes, pageIndex, index, fn) {
       const a = page.getAnnotations()[index];
       if (!a) throw new Error("commentaire introuvable");
       fn(page, a);
-      return saveMu(doc);
+      return saveMu(doc, bytes);
     } finally { page.destroy(); }
   });
 }

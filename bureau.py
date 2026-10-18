@@ -133,27 +133,59 @@ def oublier_instance():
         pass
 
 
-def confier_a_la_fenetre_ouverte(chemin):
-    """Si Mim PDF est déjà ouvert, lui confie le fichier et le met au premier plan. Vrai si c'est fait."""
+def lire_instance():
     try:
         with open(INSTANCE, encoding="utf-8") as f:
-            instance = json.load(f)
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def premier_plan(pid):
+    """Met au premier plan la fenêtre Mim PDF du processus `pid` (son titre se termine par
+    « Mim PDF », précédé du nom du document ouvert). Vrai si elle a été trouvée."""
+    if sys.platform != "win32" or not pid:
+        return False
+    import ctypes
+    from ctypes import wintypes
+    user32 = ctypes.windll.user32
+    trouvees = []
+
+    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    def chaque(fenetre, _):
+        proprietaire = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(fenetre, ctypes.byref(proprietaire))
+        if proprietaire.value == pid and user32.IsWindowVisible(fenetre):
+            titre = ctypes.create_unicode_buffer(user32.GetWindowTextLengthW(fenetre) + 1)
+            user32.GetWindowTextW(fenetre, titre, len(titre))
+            if titre.value.endswith("Mim PDF"):
+                trouvees.append(fenetre)
+                return False
+        return True
+
+    user32.EnumWindows(chaque, 0)
+    if not trouvees:
+        return False
+    if user32.IsIconic(trouvees[0]):
+        user32.ShowWindow(trouvees[0], 9)  # SW_RESTORE
+    user32.SetForegroundWindow(trouvees[0])
+    return True
+
+
+def confier_a_la_fenetre_ouverte(chemin):
+    """Si Mim PDF est déjà ouvert, lui confie le fichier et le met au premier plan. Vrai si c'est fait."""
+    instance = lire_instance()
+    try:
         demande = urllib.request.Request(instance["url"] + "_ouvrir", method="POST",
                                          data=json.dumps({"jeton": instance["jeton"], "chemin": chemin}).encode(),
                                          headers={"Content-Type": "application/json"})
         with urllib.request.urlopen(demande, timeout=10) as r:
             if r.status != 200:
                 return False
+            pid = json.loads(r.read()).get("pid")
     except Exception:  # aucune fenêtre ouverte (ou elle ne répond pas) : on en ouvre une nouvelle
         return False
-    if sys.platform == "win32":
-        import ctypes
-        user32 = ctypes.windll.user32
-        fenetre = user32.FindWindowW(None, "Mim PDF")
-        if fenetre:
-            if user32.IsIconic(fenetre):
-                user32.ShowWindow(fenetre, 9)  # SW_RESTORE
-            user32.SetForegroundWindow(fenetre)
+    premier_plan(pid)
     return True
 
 
@@ -275,6 +307,11 @@ class Api:
             return {"message": "Installation de la mise à jour…"}
         return {"message": "Aucune mise à jour à installer."}
 
+    def titre(self, texte):
+        """Nom du document ouvert dans la barre de titre de Windows."""
+        if self._window:
+            self._window.set_title(texte)
+
     def enregistrer(self, nom, contenu_base64):
         import webview
         fmt = nom.rsplit(".", 1)[-1].lower()
@@ -329,6 +366,9 @@ def main():
         verrou = ctypes.windll.kernel32.CreateMutexW(None, False, VERROU)  # noqa: F841 (gardé ouvert)
         deja_ouvert = ctypes.windll.kernel32.GetLastError() == 183  # ERROR_ALREADY_EXISTS
         if fichier and deja_ouvert and confier_a_la_fenetre_ouverte(fichier):
+            return
+        # Lancé sans fichier alors qu'une fenêtre est ouverte : on la montre au lieu d'en ouvrir une vide.
+        if not fichier and deja_ouvert and premier_plan((lire_instance() or {}).get("pid")):
             return
     elif fichier and "--essai-second" in sys.argv:  # essai automatique du second lancement
         sys.exit(0 if confier_a_la_fenetre_ouverte(fichier) else 4)
