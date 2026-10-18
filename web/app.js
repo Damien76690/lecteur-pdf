@@ -14,7 +14,7 @@ const vendorUrl = path => new URL("vendor/tesseract/" + path, location.href).hre
 
 const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
 const PT = 96 / 72;           // zoom 100 % : 1 point PDF = 1,33 pixel écran
-const OCR_ZOOM = 3.5;         // résolution envoyée à l'OCR (~250 dpi)
+const OCR_ZOOM = 4.2;         // résolution envoyée à l'OCR (~300 dpi)
 const MAX_UNDO = 30;
 
 let ready = false;
@@ -1028,14 +1028,15 @@ async function ocr(_, only = doc.pages.map((p, i) => i)) {
     workerPath: vendorUrl("worker.min.js"), corePath: vendorUrl("core"), langPath: vendorUrl("lang"),
     logger: m => m.status === "recognizing text" && say(`Reconnaissance du texte : page ${current + 1} / ${only.length} (${Math.round(m.progress * 100)} %)…`),
   });
-  // Mode 3 (mise en page automatique) : lit aussi les tableaux, contrairement au mode par défaut.
-  await worker.setParameters({ tessedit_pageseg_mode: "3" });
+  // Mode 6 (un bloc de texte) sur une image débarrassée des traits de tableau : c'est ce qui lit
+  // le mieux les montants des formulaires (bilans, liasses fiscales…) comme le texte courant.
+  await worker.setParameters({ tessedit_pageseg_mode: "6" });
   const pages = [];
   try {
     for (; current < only.length; current++) {
-      const png = core.renderPage(doc.mu, only[current], OCR_ZOOM);
+      const png = core.renderForOcr(doc.mu, only[current], OCR_ZOOM);
       const { data } = await worker.recognize(new Blob([png], { type: "image/png" }));
-      pages.push({ index: only[current], zoom: OCR_ZOOM, words: data.words.filter(w => w.confidence > 20) });
+      pages.push({ index: only[current], zoom: OCR_ZOOM, words: core.keepOcrWords(data.words) });
     }
   } finally { await worker.terminate(); }
   if (!pages.some(p => p.words.length)) throw new Error("aucun texte reconnu");
