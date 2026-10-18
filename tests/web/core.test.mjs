@@ -101,6 +101,42 @@ test("OCR : signes hauts et étroits d'un texte vertical écartés", () => {
   assert.deepEqual(kept.map(w => w.text), ["Capital", "souscrit", "AA"]);
 });
 
+test("OCR : texte vertical de la marge écarté, même lu par morceaux", () => {
+  const word = (text, x, y, h = 25) => ({ text, confidence: 90, bbox: { x0: x, y0: y, x1: x + 20, y1: y + h } });
+  const pile = ["A", "C", "T", "I", "F"].map((t, i) => word(t, 10, 100 + i * 30));
+  const kept = core.keepOcrWords([word("Capital", 100, 100), ...pile, word("2", 12, 330), word("AB", 300, 100), word("AC", 300, 150)]);
+  assert.deepEqual(kept.map(w => w.text), ["Capital", "AB", "AC"]);
+});
+
+test("OCR : chaque montant est relu seul, en chiffres", () => {
+  const word = (text, x0, x1, confidence = 90) => ({ text, confidence, bbox: { x0, y0: 100, x1, y1: 126 } });
+  const words = [word("Emprunts", 0, 100), word("|", 300, 305), word("123,87", 315, 400), word("2", 500, 515, 0), word("258,35", 525, 610, 0),
+    word("(3)", 700, 730), word("31122025", 800, 960), word("5", 1000, 1015), word("000,00", 1025, 1100)];
+  const zones = core.numberZones(words, { width: 1200, height: 300 });
+  assert.equal(zones.length, 5);
+  assert.ok(zones.every(z => z.rect.left >= 0 && z.rect.left + z.rect.width <= 1200));
+  const reads = [["1 123,87", 64], ["2 258,35", 0], ["3)", 80], ["31122025", 83], ["000,00", 96]].map(([text, confidence]) => ({ text, confidence }));
+  const kept = core.keepOcrWords(core.mergeNumberReads(words, zones, reads));
+  // « | » relu « 1 », montant peu sûr confirmé, renvoi « (3) » et « 5 000,00 » gardés, date des cases écrite en date.
+  assert.deepEqual(kept.map(w => w.text), ["Emprunts", "1 123,87", "2 258,35", "(3)", "31/12/2025", "5", "000,00"]);
+});
+
+test("Excel d'un scan : titre de colonne sur ses montants, mots séparés, cases parasites écartées", async () => {
+  const d = await PDFLib.PDFDocument.create();
+  d.addPage([595, 842]);
+  const word = (text, x0, y0, x1) => ({ text, bbox: { x0, y0, x1, y1: y0 + 12 } });
+  const words = [word("Etat", 50, 100, 75), word("31/12/2025", 300, 100, 360),
+    word("Clients", 50, 130, 90), word("1", 330, 130, 336), word("234", 340, 130, 370),
+    word("Stocks", 50, 160, 85), word("56", 330, 160, 342), word("789", 346, 160, 370), word("15]", 50, 190, 66),
+    word("TOTAL", 50, 220, 85), word("GENERAL", 86, 220, 140), word("58", 330, 220, 342), word("023", 346, 220, 370)];
+  const rows = core.extractRows(await core.addOcrLayer(await d.save(), [{ index: 0, zoom: 1, words }]))[0]
+    .map(r => r.cells.map(c => ({ col: c.col, text: c.text })));
+  assert.deepEqual(rows.map(r => r[0].text), ["Etat", "Clients", "Stocks", "TOTAL GENERAL"]);
+  const col = text => rows.flat().find(c => c.text === text).col;
+  assert.equal(col("31/12/2025"), col("1 234"));
+  assert.equal(col("58 023"), col("56 789"));
+});
+
 test("Word : un document est produit", async () => {
   const blob = await core.toDocx(docx, core.extractRows(facture()));
   assert.ok(blob.size > 1000);
