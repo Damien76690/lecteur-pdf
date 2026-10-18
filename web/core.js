@@ -782,10 +782,100 @@ export function watermark(bytes, text, { color = "#9ca3af", opacity = 0.3, size 
 // Mots de l'OCR à garder : assez sûrs, et pas ces signes très hauts et étroits que donne
 // un texte vertical de la marge (« ACTIF IMMOBILISÉ » couché le long d'un tableau).
 export function keepOcrWords(words) {
-  const sure = words.filter(w => w.confidence > 20 && w.text.trim());
+  // Les « | » et crochets isolés sont des restes de bordures de tableau, les points de suite des pointillés.
+  const sure = words.filter(w => w.confidence > 20 && w.text.trim() && !/^([|¦!\[\]]+|[.…_·]+)$/.test(w.text.trim()));
   const heights = sure.filter(w => w.text.trim().length >= 3).map(w => w.bbox.y1 - w.bbox.y0).sort((a, b) => a - b);
   const typical = heights[Math.floor(heights.length / 2)] || Infinity;
-  return sure.filter(w => !(w.text.trim().length <= 3 && w.bbox.y1 - w.bbox.y0 > typical * 1.8));
+  // Texte vertical lu lettre à lettre : une pile de signes courts, les uns collés sous les autres.
+  const piled = new Set(), short = sure.filter(w => w.text.trim().length <= 2).sort((a, b) => a.bbox.y0 - b.bbox.y0);
+  for (const w of short) {
+    if (piled.has(w)) continue;
+    const run = [w];
+    for (const o of short) {
+      const last = run[run.length - 1];
+      if (o.bbox.y0 > last.bbox.y0 && Math.abs(o.bbox.x0 - w.bbox.x0) < typical * 0.5
+          && o.bbox.y0 - last.bbox.y1 < typical * 0.9) run.push(o);
+    }
+    if (run.length >= 4) run.forEach(o => piled.add(o));
+  }
+  // Les lettres de la même pile que l'OCR a mal découpée (un « 2 » isolé en marge) suivent.
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const o of short) if (!piled.has(o) && [...piled].some(p => Math.abs(p.bbox.x0 - o.bbox.x0) < typical * 0.5
+        && Math.max(p.bbox.y0 - o.bbox.y1, o.bbox.y0 - p.bbox.y1) < typical * 8)) { piled.add(o); grew = true; }
+  }
+  return sure.filter(w => !piled.has(w) && !(w.text.trim().length <= 3 && w.bbox.y1 - w.bbox.y0 > typical * 1.8))
+    // Capitales grasses collées par l'OCR : « TOTALGENERAL », « RESULTATDE L'EXERCICE ».
+    .map(w => ({ ...w, text: w.text.replace(/^(TOTAL|RESULTAT)(?=[A-ZÀ-Ý(])/, "$1 ") }));
+}
+
+// Montants mal lus à la première lecture (un « 1 » pris pour « | », un chiffre gras avalé,
+// un nombre jugé peu sûr) : on repère chaque suite de chiffres d'une ligne pour la relire
+// seule, en n'acceptant que des chiffres. `numberZones` donne les rectangles à relire,
+// `mergeNumberReads` remet les relectures à la place des mots d'origine.
+const digitish = t => {
+  const signs = t.replace(/[^\p{L}\p{N}]/gu, ""), digits = (signs.match(/\d/g) || []).length;
+  return digits > 0 && signs.length - digits <= Math.min(1, digits - 1);
+};
+const wellRead = t => /^[-(]?\d{1,3}( \d{3})*([.,]\d+)?\)?%?$|^[-(]?\d+([.,]\d+)?\)?%?$|^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(t);
+
+export function numberZones(words, size) {
+  const items = words.map((w, i) => ({ w, i, t: w.text.trim(), h: w.bbox.y1 - w.bbox.y0, cy: (w.bbox.y0 + w.bbox.y1) / 2 }))
+    .filter(x => x.t).sort((a, b) => a.cy - b.cy);
+  const lines = [];
+  for (const x of items) {
+    const line = lines.find(l => Math.abs(l.cy - x.cy) < Math.min(l.h, x.h) * 0.5);
+    if (line) line.items.push(x); else lines.push({ cy: x.cy, h: x.h, items: [x] });
+  }
+  const zones = [];
+  for (const line of lines) {
+    const row = line.items.sort((a, b) => a.w.bbox.x0 - b.w.bbox.x0);
+    let run = [];
+    const flush = () => {
+      if (run.some(x => digitish(x.t))) zones.push(run);
+      run = [];
+    };
+    row.forEach((x, k) => {
+      const next = row[k + 1], prev = run[run.length - 1];
+      const near = (a, b) => b.w.bbox.x0 - a.w.bbox.x1 < Math.max(a.h, b.h) * 0.8;
+      // Un « | » collé à gauche d'un nombre est presque toujours un « 1 ».
+      const bar = /^[|!lI]$/.test(x.t) && next && digitish(next.t) && near(x, next) && x.h > next.h * 0.7;
+      if (!(digitish(x.t) || bar)) return flush();
+      if (prev && !near(prev, x)) flush();
+      run.push(x);
+    });
+    flush();
+  }
+  return zones.map(run => {
+    const xs = run.map(x => x.w.bbox), h = Math.max(...run.map(x => x.h));
+    const x0 = Math.min(...xs.map(b => b.x0)), x1 = Math.max(...xs.map(b => b.x1));
+    const y0 = Math.min(...xs.map(b => b.y0)), y1 = Math.max(...xs.map(b => b.y1));
+    const left = Math.max(0, Math.floor(x0 - h * 0.4)), top = Math.max(0, Math.floor(y0 - h * 0.3));
+    const right = Math.min(size?.width ?? Infinity, Math.ceil(x1 + h * 0.4)), bottom = Math.min(size?.height ?? Infinity, Math.ceil(y1 + h * 0.3));
+    return { ids: run.map(x => x.i), bbox: { x0, y0, x1, y1 }, rect: { left, top, width: right - left, height: bottom - top } };
+  });
+}
+
+export function mergeNumberReads(words, zones, reads) {
+  const drop = new Set(), add = new Map();
+  zones.forEach((z, k) => {
+    // Date des cases d'un formulaire (« 31122025 ») : écrite comme une date.
+    const text = (reads[k]?.text || "").trim().replace(/\s+/g, " ")
+      .replace(/^(0[1-9]|[12]\d|3[01])(0[1-9]|1[0-2])((19|20)\d\d)$/, "$1/$2/$3");
+    const digits = text.replace(/\D/g, "").length, sure = reads[k]?.confidence ?? 0;
+    if (!wellRead(text) || (digits < 3 && sure < 50)) return;
+    const kept = z.ids.map(i => words[i].text.trim()).join(" ").replace(/[.,;:]$/, "");
+    const was = kept.replace(/\D/g, "").length, parens = t => (t.match(/\(/g) || []).length - (t.match(/\)/g) || []).length;
+    // Une relecture qui perd des chiffres d'un nombre déjà bien lu, ou qui en change le nombre
+    // sans en être sûre, est écartée ; une relecture identique confirme des mots jugés peu sûrs.
+    const date = /\//.test(text) && sure >= 50;
+    if (parens(text) || (kept !== text && !date && wellRead(kept) && was !== digits && (sure < 80 || was > digits))) return;
+    z.ids.forEach(i => drop.add(i));
+    const first = Math.min(...z.ids);
+    add.set(first, { ...words[first], text, confidence: Math.max(sure, 21), bbox: z.bbox });
+  });
+  // Chaque relecture prend la place du premier de ses mots, pour garder l'ordre de lecture.
+  return words.flatMap((w, i) => add.has(i) ? [add.get(i)] : drop.has(i) ? [] : [w]);
 }
 
 // Ajoute une couche de texte invisible à partir des mots reconnus par l'OCR :
@@ -811,7 +901,8 @@ export async function addOcrLayer(bytes, pages) {
         const [x, y] = apply(geo[index].toPdf, x0 / zoom, base / zoom);
         page.pushOperators(op.pushGraphicsState(),
           op.setTextRenderingMode(op.TextRenderingMode.Invisible), op.setCharacterSqueeze(squeeze));
-        page.drawText(text, { x, y, size, font, rotate });
+        // L'espace qui suit chaque mot garde les mots séparés à la copie et à la conversion.
+        page.drawText(text + " ", { x, y, size, font, rotate });
         page.pushOperators(op.popGraphicsState());
       }
     }
@@ -1002,7 +1093,7 @@ export function extractRows(bytes) {
 // (restes de traits, de trames ou de textes verticaux de la marge lus par l'OCR).
 const isDebris = t => {
   const letters = (t.match(/\p{L}/gu) || []).length;
-  return !/\p{N}/u.test(t) && (letters < 2 || (letters === 2 && t.length <= 3 && !/^[A-Z]{2}$/.test(t.replace(/\W/g, ""))));
+  return !/\p{N}/u.test(t) && t !== "à" && (letters < 2 || (letters === 2 && t.length <= 3 && !/^[A-Z]{2}$/.test(t.replace(/\W/g, ""))));
 };
 const isAmount = t => typeof toNumber(t) === "number";
 // « 250 » suivi de « 190 » : un même montant écrit avec une espace entre les milliers.
@@ -1043,6 +1134,11 @@ function layoutRows(lines) {
         && cs.every((c, i) => !i || c.x - cs[i - 1].end < Math.max(c.size, cs[i - 1].size) * 2.5))
       r.cells = [{ ...cs[0], text: cs.map(c => c.text).join(" "), end: cs[cs.length - 1].end }];
   }
+  // Ligne faite d'un seul signe isolé (« 15] », « [4 ») : un reste de trait ou de case.
+  rows = rows.filter(r => !(r.cells.length === 1 && !isAmount(r.cells[0].text)
+    && r.cells[0].text.replace(/\s/g, "").length <= 3 && (r.cells[0].text.match(/\p{L}/gu) || []).length < 2));
+  // Renvoi en chiffres romains lu « (1 à VI) » ou « (là V) » : « (I à VI) ».
+  for (const r of rows) for (const c of r.cells) c.text = c.text.replace(/\((?:[1lI] à|là) ([IVX]+)\)/g, "(I à $1)");
   // Chiffre mal lu par l'OCR en tête d'un montant : « S 751 781 » -> « 5 751 781 ».
   for (const r of rows) for (const c of r.cells)
     if (/^[SsOolI|]( \d{3})+([.,]\d+)?$/.test(c.text)) c.text = ({ S: "5", s: "5", O: "0", o: "0" }[c.text[0]] ?? "1") + c.text.slice(1);
@@ -1116,13 +1212,17 @@ function layoutRows(lines) {
   });
   // Colonnes voisines de même nature qui ne se croisent sur aucune ligne : une seule colonne
   // (les libellés d'un formulaire, plus ou moins en retrait, restent ainsi dans la première).
+  // De même pour un titre de colonne (« 31/12/2025 ») posé juste au-dessus de montants alignés à droite.
   const rowsOf = col => new Set(out.flatMap((r, i) => r.cells.some(c => c.col === col) ? [i] : []));
   const width = Math.max(0, ...out.flatMap(r => r.cells.map(c => c.col + 1)));
   const map = [], groups = [];
   for (let k = 0; k < width; k++) {
-    const kind = cols[Math.min(k, cols.length - 1)]?.kind, mine = rowsOf(k), g = groups[groups.length - 1];
-    if (g && g.kind === kind && ![...mine].some(i => g.lines.has(i))) mine.forEach(i => g.lines.add(i));
-    else groups.push({ kind, lines: mine });
+    const { kind, pos } = cols[Math.min(k, cols.length - 1)] ?? {}, mine = rowsOf(k), g = groups[groups.length - 1];
+    const above = g && g.kind === "x" && kind === "end" && pos - g.pos < 100;
+    if (g && (g.kind === kind || above) && ![...mine].some(i => g.lines.has(i))) {
+      mine.forEach(i => g.lines.add(i));
+      Object.assign(g, { kind, pos });
+    } else groups.push({ kind, pos, lines: mine });
     map[k] = groups.length - 1;
   }
   for (const r of out) for (const c of r.cells) c.col = map[c.col];
