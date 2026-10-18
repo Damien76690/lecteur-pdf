@@ -123,6 +123,16 @@
   /* Texte sélectionnable posé (invisible) sur l'image de la page, comme dans les lecteurs PDF classiques. */
   .tl { position:absolute; inset:0; overflow:hidden; pointer-events:none; line-height:1; }
   .tl span { position:absolute; color:transparent; white-space:pre; transform-origin:0 0; cursor:text; }
+  .fl { position:absolute; inset:0; pointer-events:none; z-index:2; }
+  .fl > * { position:absolute; box-sizing:border-box; margin:0; padding:0 2px; border:1px solid rgba(37,99,235,.45); border-radius:2px;
+            background:rgba(37,99,235,.08); color:transparent; font-family:Helvetica, Arial, sans-serif; resize:none; }
+  .fl > select { appearance:none; cursor:pointer; }
+  .fl > select option { color:#000; }
+  .fl > .box { cursor:pointer; }
+  .fl > input:focus, .fl > textarea:focus { background:#fff; color:#000; outline:2px solid var(--accent); }
+  .mode-read .fl > * { pointer-events:auto; }
+  #pw-input { width:100%; }
+  dialog label.row input[type=password] { width:200px; }
   .tl span::selection { background:rgba(37,99,235,.35); }
   .mode-read .tl { pointer-events:auto; }
   .note-hit { z-index:2; }
@@ -174,6 +184,9 @@
         <button class="big" data-print title="Imprimer (Ctrl+P)"><span class="ic">🖨</span>Imprimer</button>
         <button class="big" id="close" title="Fermer le document"><span class="ic">✖</span>Fermer</button>
       </div><span class="gl">Document</span></div>
+      <div class="group"><div class="tools">
+        <button class="big" id="protect" title="Protéger le PDF enregistré par un mot de passe, limiter l'impression ou la copie"><span class="ic">🔒</span>Protéger</button>
+      </div><span class="gl">Sécurité</span></div>
       <div class="group"><div class="tools">
         <button class="big" data-sample="facture"><span class="ic">🧾</span>Facture d'exemple</button>
         <button class="big" data-sample="facture-scannee"><span class="ic">🖨</span>Facture scannée</button>
@@ -376,6 +389,26 @@
   </form>
 </dialog>
 <input id="insert-file" type="file" accept="application/pdf,.pdf" multiple hidden>
+<dialog id="pw-dlg">
+  <form method="dialog">
+    <h3>Document protégé</h3>
+    <p id="pw-hint"></p>
+    <input id="pw-input" type="password" autocomplete="off" placeholder="Mot de passe">
+    <div class="actions"><button value="cancel" formnovalidate>Annuler</button><button value="ok" class="primary">Ouvrir</button></div>
+  </form>
+</dialog>
+<dialog id="protect-dlg">
+  <form method="dialog">
+    <h3>Protéger le PDF</h3>
+    <p class="hint">Le mot de passe sera demandé pour ouvrir le PDF enregistré. Laissez-le vide pour seulement limiter l'impression, la copie ou les modifications.</p>
+    <label class="row">Mot de passe <input id="pr-pass" type="password" autocomplete="new-password"></label>
+    <label class="row">Confirmer <input id="pr-pass2" type="password" autocomplete="new-password"></label>
+    <label class="check"><input id="pr-print" type="checkbox" checked> Autoriser l'impression</label>
+    <label class="check"><input id="pr-copy" type="checkbox" checked> Autoriser la copie du texte</label>
+    <label class="check"><input id="pr-modify" type="checkbox" checked> Autoriser les modifications</label>
+    <div class="actions"><button value="remove" id="pr-remove" hidden>Retirer la protection</button><button value="cancel">Annuler</button><button value="ok" class="primary">Protéger</button></div>
+  </form>
+</dialog>
 <dialog id="legal-dlg">
   <form method="dialog">
     <h3>Valeur juridique d'une signature</h3>
