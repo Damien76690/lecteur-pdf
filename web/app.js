@@ -615,6 +615,25 @@ const drop = $("#drop");
 document.addEventListener("dragleave", () => drop.classList.remove("over"));
 document.addEventListener("drop", e => { e.preventDefault(); drop.classList.remove("over"); openFile(e.dataTransfer.files[0]); });
 
+// ------------------------------------------------------------ mise à jour (application Windows)
+
+window.mimMiseAJour = version => {
+  $("#maj-version").textContent = version;
+  $("#maj").hidden = false;
+};
+$("#maj-installer").onclick = async () => {
+  if (doc?.history.length && !confirm("Redémarrer sans enregistrer les modifications ?")) return;
+  say((await window.pywebview.api.installer_mise_a_jour()).message);
+};
+async function versionBureau() {
+  const etat = await window.pywebview?.api?.mise_a_jour?.();
+  if (!etat) return;
+  $("#version").textContent = " " + etat.actuelle;
+  if (etat.prete) window.mimMiseAJour(etat.prete);
+}
+if (window.pywebview?.api?.mise_a_jour) versionBureau();
+else addEventListener("pywebviewready", versionBureau, { once: true });
+
 // ------------------------------------------------------------ démarrage
 
 setButtons(false);

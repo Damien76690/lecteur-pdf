@@ -3,9 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Lecteur PDF libre</title>
+<title>Mim PDF</title>
 <meta name="description" content="Lire, modifier, corriger un PDF et le convertir en Word ou Excel, directement dans le navigateur. Vos fichiers ne quittent pas votre ordinateur.">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📄</text></svg>">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icone-180.png">
+<meta name="theme-color" content="#4338ca">
 <style>
   :root { --bg:#f3f4f6; --panel:#fff; --text:#1f2937; --muted:#6b7280; --accent:#2563eb; --border:#d1d5db; }
   * { box-sizing:border-box; }
@@ -13,7 +15,10 @@
   body { margin:0; font:14px system-ui, sans-serif; background:var(--bg); color:var(--text); }
   header { position:sticky; top:0; z-index:10; background:var(--panel); border-bottom:1px solid var(--border); }
   .top { display:flex; align-items:center; gap:8px; padding:6px 12px 0; overflow-x:auto; }
-  .top h1 { font-size:15px; margin:0 8px 0 0; white-space:nowrap; }
+  .top h1 { font-size:15px; margin:0 8px 0 0; white-space:nowrap; display:flex; align-items:center; gap:6px; }
+  .top h1 img { width:24px; height:24px; }
+  #maj { display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:8px 12px; background:#eef2ff;
+         border-bottom:1px solid #c7d2fe; color:#312e81; }
   .tabs { display:flex; gap:2px; }
   .tabs button { border:none; border-radius:6px 6px 0 0; background:none; padding:7px 14px; border-bottom:3px solid transparent; }
   .tabs button.on { color:var(--accent); border-bottom-color:var(--accent); background:var(--bg); }
@@ -96,7 +101,7 @@
 <body>
 <header>
   <div class="top">
-    <h1>📄 Lecteur PDF</h1>
+    <h1><img src="favicon.svg" alt="">Mim PDF</h1>
     <nav class="tabs" role="tablist" aria-label="Menus">
       <button role="tab" data-tab="fichier">Fichier</button>
       <button role="tab" data-tab="accueil" class="on">Accueil</button>
@@ -229,6 +234,11 @@
       </div><span class="gl">Enregistrer au format</span></div>
     </section>
   </div>
+  <div id="maj" hidden>
+    <span>Une nouvelle version de Mim PDF (<strong id="maj-version"></strong>) est prête.
+      Elle s'installera toute seule quand vous fermerez Mim PDF.</span>
+    <button id="maj-installer" class="primary">Redémarrer et mettre à jour</button>
+  </div>
 </header>
 <div id="msg">Chargement…</div>
 <div id="drop">
@@ -276,7 +286,7 @@
   </form>
 </dialog>
 <footer>
-  Logiciel libre (licence AGPL-3.0) · moteurs : MuPDF, pdf-lib, Tesseract, SheetJS, docx
+  Mim PDF<span id="version"></span> · logiciel libre (licence AGPL-3.0) · moteurs : MuPDF, pdf-lib, Tesseract, SheetJS, docx
 </footer>
 <script type="module" src="app.js"></script>
 </body>

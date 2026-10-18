@@ -23,8 +23,8 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz, a.scripts, [],
     exclude_binaries=True,
-    name="LecteurPDF",
+    name="MimPDF",
     icon=os.path.join(SPECPATH, "icone.ico"),
     console=False,
 )
-coll = COLLECT(exe, a.binaries, a.datas, name="LecteurPDF")
+coll = COLLECT(exe, a.binaries, a.datas, name="MimPDF")

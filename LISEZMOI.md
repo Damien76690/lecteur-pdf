@@ -1,4 +1,6 @@
-# Lecteur PDF libre
+<img src="logo/mim-pdf.svg" alt="Mim, le chat de Mim PDF" width="96" align="right">
+
+# Mim PDF
 
 Petit logiciel libre pour lire, modifier, corriger un PDF et le convertir en Word ou Excel.
 
@@ -33,12 +35,16 @@ Les commandes sont rangées dans des onglets, comme dans Word : **Fichier**, **A
 
 ## Application Windows (le plus simple)
 
-1. Téléchargez **[LecteurPDF-installation.exe](https://github.com/Damien76690/lecteur-pdf/releases/latest/download/LecteurPDF-installation.exe)**.
+1. Téléchargez **[MimPDF-installation.exe](https://github.com/Damien76690/lecteur-pdf/releases/latest/download/MimPDF-installation.exe)**.
 2. Double-cliquez dessus. Si Windows affiche « Windows a protégé votre ordinateur », cliquez sur **Informations complémentaires** puis **Exécuter quand même** (l'application n'est pas encore signée).
-3. Suivez les étapes : aucun droit administrateur n'est demandé. Lancez ensuite **Lecteur PDF libre** depuis le menu Démarrer ou l'icône du Bureau.
+3. Suivez les étapes : aucun droit administrateur n'est demandé. Lancez ensuite **Mim PDF** depuis le menu Démarrer ou l'icône du Bureau.
 
 L'application affiche exactement la version en ligne, mais tout est inclus dans l'ordinateur : elle fonctionne **sans Internet**, reconnaissance de texte (OCR) en français comprise. Les fichiers sont enregistrés où vous le choisissez.
-Une version sans installation existe aussi : [LecteurPDF-portable.zip](https://github.com/Damien76690/lecteur-pdf/releases/latest/download/LecteurPDF-portable.zip) (décompressez, puis double-cliquez sur `LecteurPDF.exe`).
+**Mises à jour automatiques :** une fois installé, Mim PDF vérifie au démarrage (puis toutes les 6 heures) s'il existe une nouvelle version. Il la télécharge en arrière-plan, affiche un bandeau « Redémarrer et mettre à jour », et sinon l'installe tout seul quand vous le fermez. Vos réglages et votre signature enregistrée sont conservés.
+
+Vous aviez l'ancien « Lecteur PDF libre » ? Fermez-le, puis installez Mim PDF une fois avec le lien ci-dessus : il remplace l'ancienne version (et supprime ses fichiers devenus inutiles), puis se mettra à jour seul.
+
+Une version sans installation existe aussi : [MimPDF-portable.zip](https://github.com/Damien76690/lecteur-pdf/releases/latest/download/MimPDF-portable.zip) (décompressez, puis double-cliquez sur `MimPDF.exe`). Elle ne se met pas à jour toute seule.
 
 ## Pour les développeurs
 
@@ -49,7 +55,9 @@ Une seule base de code pour les deux versions : `web/` (`core.js` = traitements,
 
 ## Fabrication de l'application Windows
 
-Elle est compilée automatiquement par GitHub (fichier `.github/workflows/windows.yml`) à chaque modification de la branche `main`, puis publiée dans **Releases**. `bureau.py` sert le site `build/site` sur l'ordinateur (127.0.0.1 uniquement) et l'affiche dans une fenêtre. Recette : `windows/lecteur-pdf.spec` (PyInstaller) et `windows/installateur.iss` (Inno Setup).
+Elle est compilée automatiquement par GitHub (fichier `.github/workflows/windows.yml`) à chaque modification de la branche `main`, puis publiée dans **Releases**. `bureau.py` sert le site `build/site` sur l'ordinateur (127.0.0.1 uniquement) et l'affiche dans une fenêtre. Recette : `windows/mim-pdf.spec` (PyInstaller) et `windows/installateur.iss` (Inno Setup). Chaque version est numérotée `1.0.<numéro de compilation>` (fichier `version.json` ajouté au site) ; l'application installée compare ce numéro à la dernière version publiée dans Releases.
+
+Le logo (`logo/mim-pdf.svg`) est un dessin original ; `windows/icone.ico` et les icônes du site (`web/favicon.svg`, `web/icone-*.png`) en sont tirés.
 
 ## En ligne de commande (optionnel, Python)
 
