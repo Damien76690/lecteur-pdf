@@ -394,6 +394,7 @@ function refreshSide() {
     b.dataset.index = i;
     b.innerHTML = `<img alt="" style="aspect-ratio:${p.w} / ${p.h}"><span>${i + 1}</span>`;
     b.onclick = () => goTo(i);
+    dragThumbs(b, i);
     thumbs.appendChild(b);
     thumbObserver.observe(b);
   });
@@ -453,6 +454,80 @@ const rotate = (i, angle) => edit("Rotation…", b => core.rotatePage(b, i, angl
 function removePage(i) {
   if (doc.pages.length === 1) return say("Impossible de supprimer la seule page du document.", true);
   if (confirm(`Supprimer la page ${i + 1} ?`)) edit("Suppression…", b => core.deletePage(b, i), "Page supprimée.");
+}
+
+// ------------------------------------------------------------ organiser les pages
+
+const blankPage = () => edit("Ajout d'une page…", b => core.insertBlankPage(b, current), () => `Page blanche ajoutée (page ${current + 2}).`);
+
+// Insérer d'autres PDF après la page affichée, ou à la fin (fusion).
+let insertAtEnd = false;
+function pickInsert(atEnd) {
+  insertAtEnd = atEnd;
+  $("#insert-file").value = "";
+  $("#insert-file").click();
+}
+$("#insert-file").onchange = async e => {
+  const files = [...e.target.files];
+  if (!doc || !files.length) return;
+  if (files.some(f => !/\.pdf$/i.test(f.name) && f.type !== "application/pdf")) return say("Choisissez des fichiers PDF.", true);
+  const list = await Promise.all(files.map(async f => new Uint8Array(await f.arrayBuffer())));
+  const after = insertAtEnd ? doc.pages.length - 1 : current;
+  let added = 0;
+  await edit(insertAtEnd ? "Fusion…" : "Insertion…", async b => {
+    for (const other of list.reverse()) {
+      try { added += core.pageInfo(other).length; } catch { throw new Error("un des fichiers n'est pas un PDF lisible"); }
+      b = await core.insertPdf(b, other, after);
+    }
+    return b;
+  }, () => `${plural(added, "page")} ajoutée${added > 1 ? "s" : ""} ${insertAtEnd ? "à la fin" : `après la page ${after + 1}`}.`);
+};
+
+async function extractPages() {
+  const text = await askText(`Pages à extraire dans un nouveau PDF (exemple : 1-3, 5 ; ce document en a ${doc.pages.length}) :`, "Extraire");
+  if (!text.trim()) return;
+  let indices;
+  try { indices = core.parseRange(text, doc.pages.length); } catch (e) { return say("Extraction impossible : " + e.message + ".", true); }
+  const bytes = await busy("Extraction…", () => core.extractPages(doc.bytes, indices));
+  if (bytes) await openBytes(bytes, `${doc.name} (pages ${text.trim().replace(/\s+/g, "")})`);
+}
+
+async function numberPages() {
+  const dlg = $("#number-dlg");
+  $("#num-from").max = doc.pages.length;
+  const ok = await new Promise(done => { dlg.onclose = () => done(dlg.returnValue === "ok"); dlg.returnValue = ""; dlg.showModal(); });
+  if (!ok) return;
+  const from = Math.min(Math.max(+$("#num-from").value || 1, 1), doc.pages.length) - 1;
+  const opts = { position: $("#num-pos").value, format: $("#num-format").value, from, first: Math.max(+$("#num-first").value || 0, 0) };
+  edit("Numérotation…", b => core.numberPages(b, opts), "Pages numérotées.");
+}
+
+async function addWatermark() {
+  const text = (await askText("Texte du filigrane (exemple : CONFIDENTIEL, COPIE, BROUILLON) :", "Poser le filigrane")).trim();
+  if (text) edit("Filigrane…", b => core.watermark(b, text), `Filigrane « ${text} » posé sur toutes les pages.`);
+}
+
+// Glisser-déposer des miniatures pour changer l'ordre des pages.
+function dragThumbs(b, i) {
+  b.draggable = true;
+  b.ondragstart = e => { e.dataTransfer.setData("text/x-mim-page", String(i)); e.dataTransfer.effectAllowed = "move"; b.classList.add("dragging"); };
+  b.ondragend = () => { b.classList.remove("dragging"); $$("#thumbs button").forEach(x => x.classList.remove("drop-before", "drop-after")); };
+  const after = e => { const r = b.getBoundingClientRect(); return e.clientY > r.top + r.height / 2; };
+  b.ondragover = e => {
+    if (!e.dataTransfer.types.includes("text/x-mim-page")) return;
+    e.preventDefault();
+    b.classList.toggle("drop-after", after(e)); b.classList.toggle("drop-before", !after(e));
+  };
+  b.ondragleave = () => b.classList.remove("drop-before", "drop-after");
+  b.ondrop = e => {
+    e.preventDefault(); e.stopPropagation();
+    const from = +e.dataTransfer.getData("text/x-mim-page");
+    let to = i + (after(e) ? 1 : 0);
+    if (from < to) to--;
+    b.classList.remove("drop-before", "drop-after");
+    if (Number.isNaN(from) || from === to) return;
+    edit("Déplacement…", bytes => core.movePage(bytes, from, to), `Page ${from + 1} déplacée en position ${to + 1}.`).then(() => goTo(to));
+  };
 }
 
 // Coordonnées écran -> points PDF tels qu'affichés.
@@ -840,6 +915,12 @@ $("#goto").onchange = e => goTo(+e.target.value - 1);
 $("#rotate-left").onclick = () => rotate(current, 270);
 $("#rotate-right").onclick = () => rotate(current, 90);
 $("#delete-page").onclick = () => removePage(current);
+$("#blank-page").onclick = blankPage;
+$("#insert-pdf").onclick = () => pickInsert(false);
+$("#append-pdf").onclick = () => pickInsert(true);
+$("#extract-pages").onclick = extractPages;
+$("#number-pages").onclick = numberPages;
+$("#watermark").onclick = addWatermark;
 $("#close").onclick = () => closeDoc();
 $("#two-pages").onclick = () => {
   twoPages = !twoPages;

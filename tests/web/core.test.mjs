@@ -160,3 +160,54 @@ test("un PDF signé garde sa signature quand on le commente", async () => {
 test("aucun champ de formulaire dans la facture", () => {
   assert.equal(core.formFields(open(facture())), 0);
 });
+
+// ------------------------------------------------------------ pages
+
+const pages = bytes => core.pageInfo(bytes).length;
+async function numbered(n) {
+  const d = await PDFLib.PDFDocument.create();
+  const font = await d.embedFont(PDFLib.StandardFonts.Helvetica);
+  for (let i = 1; i <= n; i++) d.addPage([400, 500]).drawText(`Contenu ${i}`, { x: 50, y: 400, size: 20, font });
+  return d.save();
+}
+
+test("lire une liste de pages", () => {
+  assert.deepEqual(core.parseRange("1-3, 5", 8), [0, 1, 2, 4]);
+  assert.deepEqual(core.parseRange("7-fin", 8), [6, 7]);
+  assert.deepEqual(core.parseRange("3-1", 8), [2, 1, 0]);
+  assert.throws(() => core.parseRange("9", 8), /8 page/);
+  assert.throws(() => core.parseRange("a", 8), /n'est pas/);
+  assert.throws(() => core.parseRange(" ", 8), /indiquez/);
+});
+
+test("déplacer, extraire, insérer, fusionner, page blanche", async () => {
+  const doc = await numbered(4);
+  const order = b => text(b).match(/Contenu \d/g).join(",");
+  assert.equal(order(await core.movePage(doc, 0, 2)), "Contenu 2,Contenu 3,Contenu 1,Contenu 4");
+  assert.equal(order(await core.movePage(doc, 3, 0)), "Contenu 4,Contenu 1,Contenu 2,Contenu 3");
+  assert.equal(order(await core.extractPages(doc, [3, 1])), "Contenu 4,Contenu 2");
+  const merged = await core.mergePdfs([doc, facture()]);
+  assert.equal(pages(merged), 5);
+  assert.match(text(merged), /Contenu 4[\s\S]*Société Dupont/);
+  const inserted = await core.insertPdf(doc, facture(), 0);
+  assert.match(text(inserted), /Contenu 1[\s\S]*Société Dupont[\s\S]*Contenu 2/);
+  const blank = await core.insertBlankPage(doc, 1);
+  assert.equal(pages(blank), 5);
+  assert.deepEqual(core.pageInfo(blank)[2].w, 400);
+  assert.equal(order(blank), "Contenu 1,Contenu 2,Contenu 3,Contenu 4");
+});
+
+test("numéroter les pages et poser un filigrane", async () => {
+  const doc = await numbered(3);
+  const n = await core.numberPages(doc);
+  assert.match(text(n), /Page 1 \/ 3/);
+  assert.match(text(n), /Page 3 \/ 3/);
+  const skip = await core.numberPages(doc, { format: "{n}", from: 1, first: 1, position: "haut-droite" });
+  // La première page n'est pas numérotée : les deux suivantes portent 1 et 2.
+  assert.match(text(skip), /^1$/m);
+  assert.match(text(skip), /^2$/m);
+  assert.doesNotMatch(text(skip), /^3$/m);
+  const w = await core.watermark(doc, "CONFIDENTIEL");
+  assert.match(text(w), /CONFIDENTIEL/);
+  assert.match(text(w), /Contenu 1/);
+});

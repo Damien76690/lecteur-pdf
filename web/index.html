@@ -112,6 +112,11 @@
   #thumbs { display:flex; flex-direction:column; align-items:center; gap:4px; padding:10px 0; }
   #thumbs button { border:2px solid transparent; padding:2px; background:none; display:flex; flex-direction:column; align-items:center;
                    gap:2px; font-size:12px; color:var(--muted); }
+  #thumbs button.drop-before { box-shadow:0 -3px 0 var(--accent); }
+  #thumbs button.drop-after { box-shadow:0 3px 0 var(--accent); }
+  #thumbs button.dragging { opacity:.4; }
+  dialog label.row { display:flex; justify-content:space-between; align-items:center; gap:10px; margin:8px 0; }
+  dialog label.row input { width:80px; }
   #thumbs button.cur { border-color:var(--accent); color:var(--accent); }
   #thumbs img { width:120px; background:#fff; box-shadow:0 1px 3px rgba(0,0,0,.25); display:block; }
   @media (max-width: 700px) { #side { position:fixed; left:8px; top:auto; bottom:8px; width:60vw; max-height:50vh; margin:0; z-index:20; } }
@@ -286,6 +291,16 @@
         <button class="big" id="rotate-right" title="Pivoter la page affichée vers la droite"><span class="ic">⟳</span>Pivoter à droite</button>
         <button class="big" id="delete-page" title="Supprimer la page affichée"><span class="ic">🗑</span>Supprimer la page</button>
       </div><span class="gl">Page affichée</span></div>
+      <div class="group"><div class="tools">
+        <button class="big" id="blank-page" title="Ajouter une page blanche après la page affichée"><span class="ic">📄</span>Page blanche</button>
+        <button class="big" id="insert-pdf" title="Insérer les pages d'autres PDF après la page affichée"><span class="ic">📥</span>Insérer un PDF</button>
+        <button class="big" id="append-pdf" title="Ajouter d'autres PDF à la fin (fusionner)"><span class="ic">🔗</span>Fusionner</button>
+        <button class="big" id="extract-pages" title="Créer un nouveau PDF avec certaines pages"><span class="ic">✂</span>Extraire des pages</button>
+      </div><span class="gl">Organiser (glissez les miniatures pour changer l'ordre)</span></div>
+      <div class="group"><div class="tools">
+        <button class="big" id="number-pages" title="Ajouter les numéros de page"><span class="ic">#</span>Numéroter</button>
+        <button class="big" id="watermark" title="Écrire un filigrane en diagonale sur toutes les pages"><span class="ic">💧</span>Filigrane</button>
+      </div><span class="gl">Sur toutes les pages</span></div>
     </section>
     <section data-panel="convertir" hidden>
       <div class="group"><div class="tools">
@@ -347,6 +362,20 @@
     <div class="actions"><button value="cancel">Annuler</button><button value="ok" class="primary">Valider</button></div>
   </form>
 </dialog>
+<dialog id="number-dlg">
+  <form method="dialog">
+    <h3>Numéroter les pages</h3>
+    <label class="row">Position <select id="num-pos">
+      <option value="bas-centre">En bas, au centre</option><option value="bas-droite">En bas, à droite</option><option value="bas-gauche">En bas, à gauche</option>
+      <option value="haut-centre">En haut, au centre</option><option value="haut-droite">En haut, à droite</option><option value="haut-gauche">En haut, à gauche</option></select></label>
+    <label class="row">Texte <select id="num-format">
+      <option value="Page {n} / {total}">Page 1 / 10</option><option value="{n}">1</option><option value="Page {n}">Page 1</option><option value="{n} / {total}">1 / 10</option><option value="- {n} -">- 1 -</option></select></label>
+    <label class="row">Commencer à la page <input id="num-from" type="number" min="1" value="1"></label>
+    <label class="row">Premier numéro <input id="num-first" type="number" min="0" value="1"></label>
+    <div class="actions"><button value="cancel">Annuler</button><button value="ok" class="primary">Numéroter</button></div>
+  </form>
+</dialog>
+<input id="insert-file" type="file" accept="application/pdf,.pdf" multiple hidden>
 <dialog id="legal-dlg">
   <form method="dialog">
     <h3>Valeur juridique d'une signature</h3>
