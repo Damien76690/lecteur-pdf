@@ -1183,12 +1183,23 @@ function textChunks(page) {
 // Regroupe le texte de chaque page en lignes visuelles composées de cellules
 // (un tableau donne une cellule par case), avec des colonnes alignées.
 // Renvoie [[{ cells: [{ col, text, size, bold }] }]] (une liste de lignes par page).
-export function extractRows(bytes) {
+// Avec `area` = { page, rect: [x0, y0, x1, y1] } (points tels qu'affichés), seul le texte
+// de cette zone est lu : un tableau encadré à la souris, exporté seul.
+export function extractRows(bytes, area) {
   return withMu(bytes, doc => {
     const pages = [];
     for (let i = 0; i < doc.countPages(); i++) {
+      if (area && i !== area.page) continue;
       const page = doc.loadPage(i);
-      pages.push(layoutRows(textChunks(page)));
+      let chunks = textChunks(page);
+      if (area) {
+        const [x0, y0, x1, y1] = box([area.rect[0], area.rect[1]], [area.rect[2], area.rect[3]]);
+        chunks = chunks.filter(c => {
+          const cx = c.x + c.bbox.w / 2, cy = (c.top + c.bottom) / 2;
+          return cx >= x0 && cx <= x1 && cy >= y0 && cy <= y1;
+        });
+      }
+      pages.push(layoutRows(chunks));
       page.destroy();
     }
     return pages;
@@ -1401,7 +1412,7 @@ export function toText(pages) {
 }
 
 // Classeur Excel (SheetJS) : une feuille par page, nombres convertis.
-export function toXlsx(XLSX, pages) {
+export function toXlsx(XLSX, pages, names = pages.map((p, i) => `Page ${i + 1}`)) {
   const wb = XLSX.utils.book_new();
   pages.forEach((rows, i) => {
     const data = rows.map(r => rowToArray(r).map(toNumber));
@@ -1411,7 +1422,7 @@ export function toXlsx(XLSX, pages) {
     const width = Math.max(1, ...data.map(r => r.length));
     ws["!cols"] = Array.from({ length: width }, (_, k) =>
       ({ wch: Math.min(60, Math.max(8, ...data.map(r => String(r[k] ?? "").length + 2))) }));
-    XLSX.utils.book_append_sheet(wb, ws, `Page ${i + 1}`);
+    XLSX.utils.book_append_sheet(wb, ws, names[i]);
   });
   return XLSX.write(wb, { type: "array", bookType: "xlsx" });
 }
@@ -1442,4 +1453,103 @@ export async function toDocx(docx, pages) {
     }
   });
   return docx.Packer.toBlob(new docx.Document({ sections: [{ children }] }));
+}
+
+// ------------------------------------------------------------ résumer, découper, signatures
+
+// Texte de tout le document pour un assistant (Copilot…) : une partie par page, cases d'un
+// tableau séparées par « | », pour qu'il garde les montants sur leur ligne.
+export function documentText(pages) {
+  return pages.map((rows, i) => {
+    const lines = rows.map(r => rowToArray(r).filter(t => t.trim()).join(" | ")).filter(Boolean);
+    return lines.length ? `--- Page ${i + 1} ---\n${lines.join("\n")}` : "";
+  }).filter(Boolean).join("\n\n");
+}
+
+// Parties d'un document découpé par signets : chaque signet choisi (indices dans `outline`)
+// ouvre une partie qui va jusqu'au signet choisi suivant. Les pages avant le premier forment
+// une partie « Début ». Renvoie [{ title, from, to }] (pages numérotées à partir de 0).
+export function bookmarkParts(outline, count, chosen = outline.map((o, k) => k)) {
+  const starts = [];
+  for (const k of chosen) {
+    const o = outline[k];
+    if (!o || o.page < 0 || o.page >= count) continue;
+    const title = o.title.replace(/^[\s\-_–—=.*]+|[\s\-_–—=.*]+$/g, "").replace(/\s+/g, " ") || `Page ${o.page + 1}`;
+    const same = starts.find(s => s.from === o.page);
+    if (same) same.title += " - " + title;   // deux signets sur la même page : une seule partie
+    else starts.push({ title, from: o.page });
+  }
+  starts.sort((a, b) => a.from - b.from);
+  if (!starts.length) return [];
+  if (starts[0].from > 0) starts.unshift({ title: "Début", from: 0 });
+  return starts.map((s, k) => ({ ...s, to: (starts[k + 1]?.from ?? count) - 1 }));
+}
+
+// Nom de fichier Windows acceptable : « 03 - Bilan Actif.pdf ».
+export function fileName(title, max = 80) {
+  return title.replace(/[\\/:*?"<>|\u0000-\u001f]/g, " ").replace(/\s+/g, " ").trim().slice(0, max).replace(/[ .]+$/, "") || "document";
+}
+
+// Archive ZIP (sans compression : des PDF sont déjà compressés) de [{ name, bytes }].
+const CRC = Array.from({ length: 256 }, (_, n) => {
+  for (let k = 0; k < 8; k++) n = n & 1 ? 0xedb88320 ^ (n >>> 1) : n >>> 1;
+  return n >>> 0;
+});
+const crc32 = bytes => {
+  let c = 0xffffffff;
+  for (const b of bytes) c = CRC[(c ^ b) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+};
+export function zip(files) {
+  const enc = new TextEncoder(), parts = [], central = [];
+  let offset = 0;
+  const now = new Date();
+  const time = (now.getHours() << 11) | (now.getMinutes() << 5) | (now.getSeconds() >> 1);
+  const date = ((now.getFullYear() - 1980) << 9) | ((now.getMonth() + 1) << 5) | now.getDate();
+  for (const f of files) {
+    const name = enc.encode(f.name), crc = crc32(f.bytes), n = f.bytes.length;
+    const head = (sig, extra) => {
+      const h = new DataView(new ArrayBuffer(extra));
+      h.setUint32(0, sig, true);
+      return h;
+    };
+    const local = head(0x04034b50, 30);
+    // version 2.0, drapeau 0x0800 : noms en UTF-8 (accents), méthode 0 : stockés tels quels
+    [[4, 20], [6, 0x0800], [8, 0], [10, time], [12, date]].forEach(([o, v]) => local.setUint16(o, v, true));
+    [[14, crc], [18, n], [22, n]].forEach(([o, v]) => local.setUint32(o, v, true));
+    local.setUint16(26, name.length, true);
+    parts.push(new Uint8Array(local.buffer), name, f.bytes);
+    const c = head(0x02014b50, 46);
+    [[4, 20], [6, 20], [8, 0x0800], [10, 0], [12, time], [14, date]].forEach(([o, v]) => c.setUint16(o, v, true));
+    [[16, crc], [20, n], [24, n], [42, offset]].forEach(([o, v]) => c.setUint32(o, v, true));
+    c.setUint16(28, name.length, true);
+    central.push(new Uint8Array(c.buffer), name);
+    offset += 30 + name.length + n;
+  }
+  const size = central.reduce((s, p) => s + p.length, 0);
+  const end = new DataView(new ArrayBuffer(22));
+  end.setUint32(0, 0x06054b50, true);
+  end.setUint16(8, files.length, true); end.setUint16(10, files.length, true);
+  end.setUint32(12, size, true); end.setUint32(16, offset, true);
+  const all = [...parts, ...central, new Uint8Array(end.buffer)];
+  const out = new Uint8Array(all.reduce((s, p) => s + p.length, 0));
+  let at = 0;
+  for (const p of all) { out.set(p, at); at += p.length; }
+  return out;
+}
+
+// Bilan des signatures électroniques (voir signatures()) pour le bandeau affiché à l'ouverture :
+// { level: "ok" | "warn" | "bad", text }.
+export function signatureSummary(sigs) {
+  if (!sigs.length) return { level: "warn", text: "Ce document contient une signature électronique que Mim PDF ne sait pas lire." };
+  const who = [...new Set(sigs.map(s => s.name || "signataire inconnu"))].join(", ");
+  const dates = sigs.map(s => s.date).filter(Boolean).sort();
+  const when = dates.length ? ` le ${new Date(dates[dates.length - 1]).toLocaleDateString("fr-FR")}` : "";
+  const intro = `Signé électroniquement par ${who}${when}`;
+  if (sigs.some(s => s.intact === false))
+    return { level: "bad", text: `${intro}, mais le contenu a été modifié après la signature : elle n'est plus valable.` };
+  if (sigs.some(s => s.intact === null))
+    return { level: "warn", text: `${intro}. Mim PDF ne sait pas contrôler ce format de signature : vérifiez-la dans Adobe Acrobat Reader.` };
+  const added = !sigs.some(s => s.covers);
+  return { level: "ok", text: `${intro} : document intact${added ? " (des commentaires ont été ajoutés après la signature)" : ""}.` };
 }
