@@ -38,6 +38,10 @@ Les commandes sont rangées dans des onglets, comme dans Word : **Fichier**, **A
 | PDF scanné → texte | **Modifier › Reconnaître le texte** : le PDF devient sélectionnable, modifiable et convertible. Les boutons Word, Excel et Texte le font d'eux-mêmes sur un scan, et chaque montant est relu une seconde fois, seul, en chiffres, puis chaque libellé peu sûr ligne par ligne |
 | Pivoter, supprimer une page | **Pages**, ou boutons ⟳ et 🗑 en haut à droite de chaque page |
 | Changer l'ordre des pages | Glissez une miniature du panneau **Pages** à sa nouvelle place |
+| Un PDF par partie (Bilan, Compte de résultat, Annexe…) | **Pages › Découper par signets** : cochez les signets qui commencent chaque partie (dossier choisi dans l'application Windows, fichier ZIP en ligne) |
+| Un seul tableau vers Excel | **Convertir › Tableau vers Excel**, puis encadrez le tableau sur la page (un scan est lu automatiquement) |
+| Synthèse par Copilot | **Synthèse › Envoyer à Copilot** : Mim PDF copie votre demande et le texte du document, puis ouvre Copilot ; collez (Ctrl+V) et envoyez. Le texte part alors chez Microsoft |
+| PDF signé (Docusign, certificat…) | Un bandeau le signale dès l'ouverture : vert si le document est intact, rouge s'il a été modifié après la signature (**Détails** pour en savoir plus) |
 | Ajouter une page blanche, insérer un autre PDF, fusionner | **Pages › Page blanche / Insérer un PDF / Fusionner** (insérer : après la page affichée ; fusionner : à la fin) |
 | Extraire des pages dans un nouveau PDF | **Pages › Extraire des pages**, puis par exemple `1-3, 5` : le résultat s'ouvre dans un nouvel onglet |
 | Numéroter les pages, poser un filigrane | **Pages › Numéroter** (position, « Page 1 / 10 »…, première page numérotée) et **Pages › Filigrane** (CONFIDENTIEL, COPIE…) |

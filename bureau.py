@@ -358,6 +358,68 @@ class Api:
         if self._window:
             self._window.set_title(texte)
 
+    def enregistrer_dossier(self, nom, fichiers):
+        """Plusieurs fichiers ([{nom, b64}]) dans un nouveau dossier « nom », créé là où l'on choisit."""
+        import webview
+        choix = self._window.create_file_dialog(webview.FileDialog.FOLDER)
+        if not choix:
+            return {"message": "Enregistrement annulé."}
+        parent = choix if isinstance(choix, str) else choix[0]
+        nom = os.path.basename(nom).strip() or "Mim PDF"
+        dest, n = os.path.join(parent, nom), 2
+        while os.path.exists(dest):
+            dest, n = os.path.join(parent, f"{nom} ({n})"), n + 1
+        os.makedirs(dest)
+        for f in fichiers:
+            with open(os.path.join(dest, os.path.basename(f["nom"])), "wb") as sortie:
+                sortie.write(base64.b64decode(f["b64"]))
+        if sys.platform == "win32":
+            os.startfile(dest)  # montre le dossier dans l'Explorateur
+        return {"message": f"Enregistrés dans : {dest}"}
+
+    def copier(self, texte):
+        """Met le texte dans le presse-papiers de Windows (pour le coller dans Copilot)."""
+        if sys.platform != "win32":
+            return False
+        import ctypes
+        from ctypes import wintypes
+        k32, u32 = ctypes.windll.kernel32, ctypes.windll.user32
+        k32.GlobalAlloc.restype = wintypes.HGLOBAL
+        k32.GlobalAlloc.argtypes = [wintypes.UINT, ctypes.c_size_t]
+        k32.GlobalLock.restype = wintypes.LPVOID
+        k32.GlobalLock.argtypes = [wintypes.HGLOBAL]
+        k32.GlobalUnlock.argtypes = [wintypes.HGLOBAL]
+        u32.SetClipboardData.restype = wintypes.HANDLE
+        u32.SetClipboardData.argtypes = [wintypes.UINT, wintypes.HANDLE]
+        donnees = texte.encode("utf-16-le") + b"\0\0"
+        for _ in range(10):  # le presse-papiers peut être un instant occupé par un autre logiciel
+            if u32.OpenClipboard(None):
+                break
+            threading.Event().wait(0.05)
+        else:
+            return False
+        try:
+            u32.EmptyClipboard()
+            bloc = k32.GlobalAlloc(0x0002, len(donnees))  # GMEM_MOVEABLE
+            ctypes.memmove(k32.GlobalLock(bloc), donnees, len(donnees))
+            k32.GlobalUnlock(bloc)
+            return bool(u32.SetClipboardData(13, bloc))  # CF_UNICODETEXT
+        finally:
+            u32.CloseClipboard()
+
+    def ouvrir_copilot(self):
+        """Ouvre l'application Copilot de Windows, ou Copilot dans le navigateur si elle est absente."""
+        if sys.platform == "win32":
+            import winreg
+            try:  # Windows propose sinon de « chercher une application » dans le Store
+                winreg.CloseKey(winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, "ms-copilot"))
+                os.startfile("ms-copilot:")
+                return True
+            except OSError as e:
+                print("Application Copilot introuvable :", repr(e), flush=True)
+        import webbrowser
+        return webbrowser.open("https://copilot.microsoft.com/")
+
     def enregistrer(self, nom, contenu_base64):
         import webview
         fmt = nom.rsplit(".", 1)[-1].lower()

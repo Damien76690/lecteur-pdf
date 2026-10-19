@@ -498,3 +498,61 @@ test("signer avec un certificat, vérifier, puis détecter une modification", ()
   assert.ok(both.every(s => s.intact));
 });
 const latin1 = b => new TextDecoder("latin1").decode(b);
+
+test("Excel d'un tableau encadré : seul le contenu de la zone est exporté", () => {
+  // Le tableau de la facture occupe x 72-532, y 140-236 (points tels qu'affichés).
+  const pages = core.extractRows(facture(), { page: 0, rect: [532, 236, 70, 138] });
+  assert.equal(pages.length, 1);
+  const wb = XLSX.read(core.toXlsx(XLSX, pages));
+  const rows = XLSX.utils.sheet_to_json(wb.Sheets["Page 1"], { header: 1 });
+  assert.deepEqual(rows[0], ["Article", "Quantité", "Prix unitaire", "Total"]);
+  assert.deepEqual(rows[1], ["Papier A4", 10, 4.5, 45]);
+  assert.equal(rows.length, 4);
+  assert.doesNotMatch(JSON.stringify(rows), /Facture|Dupont|Total à payer/);
+  assert.deepEqual(core.extractRows(facture(), { page: 0, rect: [300, 600, 400, 700] }), [[]]);
+});
+
+test("texte du document pour Copilot : une partie par page, cases séparées", () => {
+  const t = core.documentText(core.extractRows(facture()));
+  assert.match(t, /^--- Page 1 ---\nFacture n° 2026-042/);
+  assert.match(t, /Papier A4 \| 10 \| 4,50 \| 45,00/);
+});
+
+test("découper par signets : une partie par signet choisi", () => {
+  const outline = [{ title: "---------- BILAN ----------", page: 2, level: 0 }, { title: "Bilan Actif", page: 2, level: 1 },
+                   { title: "Bilan Passif", page: 4, level: 1 }, { title: "Annexe", page: 9, level: 0 }, { title: "Lien", page: -1, level: 0 }];
+  assert.deepEqual(core.bookmarkParts(outline, 12, [0, 3]),
+    [{ title: "Début", from: 0, to: 1 }, { title: "BILAN", from: 2, to: 8 }, { title: "Annexe", from: 9, to: 11 }]);
+  assert.deepEqual(core.bookmarkParts(outline, 12).map(p => [p.title, p.from, p.to]),
+    [["Début", 0, 1], ["BILAN - Bilan Actif", 2, 3], ["Bilan Passif", 4, 8], ["Annexe", 9, 11]]);
+  assert.deepEqual(core.bookmarkParts([], 3), []);
+  assert.equal(core.fileName('01 - Bilan: "actif"?'), "01 - Bilan actif");
+});
+
+test("archive ZIP lisible : noms accentués, contenus intacts", () => {
+  const files = [{ name: "01 - Début.pdf", bytes: facture() }, { name: "02 - Été.txt", bytes: new TextEncoder().encode("bonjour") }];
+  const z = core.zip(files), v = new DataView(z.buffer, z.byteOffset);
+  assert.equal(v.getUint32(0, true), 0x04034b50);
+  const end = z.length - 22;
+  assert.equal(v.getUint32(end, true), 0x06054b50);
+  assert.equal(v.getUint16(end + 10, true), 2);
+  // Relit chaque fichier depuis le répertoire central.
+  let at = v.getUint32(end + 16, true);
+  for (const f of files) {
+    assert.equal(v.getUint32(at, true), 0x02014b50);
+    const n = v.getUint16(at + 28, true), size = v.getUint32(at + 24, true), local = v.getUint32(at + 42, true);
+    assert.equal(new TextDecoder().decode(z.subarray(at + 46, at + 46 + n)), f.name);
+    const ln = v.getUint16(local + 26, true);
+    assert.deepEqual(z.subarray(local + 30 + ln, local + 30 + ln + size), f.bytes);
+    at += 46 + n;
+  }
+});
+
+test("bandeau des signatures : intacte, ajouts, modifiée, format inconnu", () => {
+  const s = { name: "DocuSign", date: "2026-03-12T10:00:00.000Z", intact: true, covers: true };
+  assert.deepEqual(core.signatureSummary([s]), { level: "ok", text: "Signé électroniquement par DocuSign le 12/03/2026 : document intact." });
+  assert.match(core.signatureSummary([{ ...s, covers: false }]).text, /commentaires ont été ajoutés/);
+  assert.equal(core.signatureSummary([{ ...s, intact: false }]).level, "bad");
+  assert.equal(core.signatureSummary([{ ...s, intact: null }]).level, "warn");
+  assert.equal(core.signatureSummary([]).level, "warn");
+});
