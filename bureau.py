@@ -35,6 +35,8 @@ SITE = os.path.join(getattr(sys, "_MEIPASS", ICI), "site") if hasattr(sys, "_MEI
 DONNEES = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "MimPDF")
 JOURNAL = os.path.join(DONNEES, "journal.txt")
 INSTANCE = os.path.join(DONNEES, "instance.json")  # port et jeton de la fenêtre ouverte
+NAVIGATEUR = os.path.join(DONNEES, "navigateur")   # cache de la fenêtre : garde le modèle du résumé IA
+PORT = 47615  # toujours le même si possible : le cache du navigateur est lié à l'adresse
 RECENTS = os.path.join(DONNEES, "recents.json")    # derniers documents ouverts (chemins)
 MAX_RECENTS = 12
 DEPOT = "Damien76690/lecteur-pdf"
@@ -106,10 +108,19 @@ class Pages(SimpleHTTPRequestHandler):
         self.wfile.write(json.dumps({"pid": os.getpid()}).encode())
 
 
+class ServeurExclusif(ThreadingHTTPServer):
+    # Sous Windows, SO_REUSEADDR laisserait deux programmes écouter le même port.
+    allow_reuse_address = sys.platform != "win32"
+
+
 def demarrer_serveur():
     if not os.path.isfile(os.path.join(SITE, "index.html")):
         raise SystemExit(f"Site introuvable dans {SITE} : lancez d'abord  npm run build -- build/site")
-    serveur = ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(Pages, directory=SITE))
+    pages = functools.partial(Pages, directory=SITE)
+    try:
+        serveur = ServeurExclusif(("127.0.0.1", PORT), pages)
+    except OSError:  # port déjà pris : un autre au hasard (le modèle IA sera alors retéléchargé)
+        serveur = ThreadingHTTPServer(("127.0.0.1", 0), pages)
     threading.Thread(target=serveur.serve_forever, daemon=True).start()
     return f"http://127.0.0.1:{serveur.server_address[1]}/"
 
@@ -554,7 +565,10 @@ def main():
             finally:
                 window.destroy()
 
-    webview.start(essai, api._window, gui="edgechromium" if sys.platform == "win32" else None)
+    # private_mode=False : sans lui, la fenêtre oublie tout à la fermeture, et le modèle du résumé IA
+    # (plus de 1 Go) serait retéléchargé à chaque lancement.
+    webview.start(essai, api._window, gui="edgechromium" if sys.platform == "win32" else None,
+                  private_mode=False, storage_path=NAVIGATEUR)
     oublier_instance()
     if api._maj:  # mise à jour téléchargée mais pas encore installée : on l'installe en partant
         api._maj.installer(relancer=False)

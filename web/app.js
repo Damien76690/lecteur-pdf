@@ -843,7 +843,8 @@ async function exportTable(i, rect) {
 const COPILOT_ASK = "Fais une synthèse claire en français de ce document : son objet, les points clés, " +
   "les chiffres importants (montants, dates, échéances) et ce qui demande une action ou une vigilance.";
 const COPILOT_LONG = 15000;   // au-delà, Copilot risque de ne lire que le début d'un texte collé
-async function sendToCopilot() {
+// Texte de tout le document, après lecture des pages scannées. undefined en cas d'erreur (déjà affichée).
+async function documentText() {
   const text = await busy("Préparation du texte…", async () => {
     const scans = doc.pages.flatMap((p, i) => p.hasText ? [] : [i]);
     if (scans.length) {
@@ -853,8 +854,18 @@ async function sendToCopilot() {
     }
     return core.documentText(core.extractRows(doc.bytes));
   });
-  if (text === undefined) return;                 // erreur déjà affichée
-  if (!text.trim()) return say("Aucun texte trouvé dans ce document.", true);
+  if (text !== undefined && !text.trim()) { say("Aucun texte trouvé dans ce document.", true); return; }
+  return text;
+}
+async function copyText(text) {
+  const api = window.pywebview?.api;
+  try { return api?.copier ? await api.copier(text) : (await navigator.clipboard.writeText(text), true); }
+  catch (e) { console.error(e); return false; }
+}
+
+async function sendToCopilot() {
+  const text = await documentText();
+  if (text === undefined) return;
   const dlg = $("#copilot-dlg"), ask = $("#copilot-ask");
   ask.value ||= COPILOT_ASK;
   $("#copilot-size").textContent = `${doc.name}.pdf : ${plural(doc.pages.length, "page")}, ${text.length.toLocaleString("fr-FR")} caractères.` +
@@ -864,12 +875,124 @@ async function sendToCopilot() {
   if (!ok) return say("Envoi à Copilot annulé.");
   const full = `${ask.value.trim() || COPILOT_ASK}\n\nDocument : ${doc.name}.pdf\n\n${text}`;
   const api = window.pywebview?.api;
-  let copied = false;
-  try { copied = api?.copier ? await api.copier(full) : (await navigator.clipboard.writeText(full), true); } catch (e) { console.error(e); }
+  const copied = await copyText(full);
   if (api?.ouvrir_copilot) await api.ouvrir_copilot();
   else window.open("https://copilot.microsoft.com/", "_blank", "noopener");
   say(copied ? "Texte copié et Copilot ouvert : cliquez dans sa zone de saisie, collez (Ctrl+V) puis envoyez."
              : "Copilot est ouvert, mais la copie automatique a échoué : sélectionnez le texte (Ctrl+A) en mode Lecture et copiez-le (Ctrl+C).", !copied);
+}
+
+// Résumés faits sur ce PC : le rapide sans IA, l'autre avec un petit modèle de langue libre
+// (Qwen) exécuté dans la page par Transformers.js. Seul le modèle est téléchargé, une fois ;
+// le texte du document ne quitte jamais l'ordinateur.
+const TRANSFORMERS = "https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1/dist/transformers.min.js";
+const MODELS = {
+  webgpu: { id: "onnx-community/Qwen2.5-1.5B-Instruct", dtype: "q4f16", size: "1,2 Go" },   // carte graphique
+  wasm: { id: "onnx-community/Qwen2.5-0.5B-Instruct", dtype: "int8", size: "0,5 Go" },       // processeur seul
+};
+const AI_OK = "mim-resume-ia-accepte";
+let ai = null, summarizing = false;
+
+function showSummary(title) {
+  const dlg = $("#resume-dlg");
+  $("#resume-title").textContent = title;
+  $("#resume-text").textContent = ""; $("#resume-state").textContent = "";
+  if (!dlg.open) dlg.showModal();
+  return {
+    state: t => { $("#resume-state").textContent = t; },
+    text: t => { const box = $("#resume-text"); box.textContent = t; box.scrollTop = box.scrollHeight; },
+    open: () => dlg.open,
+  };
+}
+
+async function quickResume() {
+  const text = await documentText();
+  if (text === undefined) return;
+  const r = core.quickSummary(text);
+  const view = showSummary(`Résumé rapide : ${doc.name}`);
+  view.text(core.summaryText(r) || "Pas assez de phrases dans ce document pour en tirer un résumé.");
+  view.state("Phrases et chiffres repris tels quels du document, sans intelligence artificielle. Pour une synthèse rédigée, utilisez « Résumé IA ».");
+  say("Résumé rapide prêt.");
+}
+
+async function gpuOk() {
+  try { return !!(navigator.gpu && await navigator.gpu.requestAdapter()); } catch { return false; }
+}
+
+async function loadAi(view, device) {
+  if (ai?.device === device) return ai;
+  const T = await import(TRANSFORMERS).catch(() => { throw new Error("impossible de charger l'IA (vérifiez la connexion Internet pour ce premier usage)"); });
+  const m = MODELS[device], files = {};
+  const progress = p => {
+    if (p.status !== "progress" || !p.total) return;
+    files[p.file] = [p.loaded, p.total];
+    const [got, all] = Object.values(files).reduce(([a, b], [x, y]) => [a + x, b + y], [0, 0]);
+    view.state(`Téléchargement du modèle (une seule fois) : ${Math.floor(got / 1048576)} Mo sur ${Math.floor(all / 1048576)} Mo…`);
+  };
+  view.state("Préparation de l'intelligence artificielle…");
+  const generator = await T.pipeline("text-generation", m.id, { device, dtype: m.dtype, progress_callback: progress });
+  return ai = { T, generator, device };
+}
+
+async function aiResume() {
+  if (summarizing) return $("#resume-dlg").showModal();
+  const device = await gpuOk() ? "webgpu" : "wasm";
+  let accepted = false;
+  try { accepted = localStorage.getItem(AI_OK) === device; } catch {}
+  if (!accepted && !ai) {
+    const dlg = $("#ia-dlg");
+    $("#ia-size").textContent = MODELS[device].size;
+    $("#ia-device").textContent = device === "webgpu"
+      ? "La carte graphique de ce PC sera utilisée : comptez une à quelques minutes selon la longueur du document."
+      : "Ce PC ne permet pas d'utiliser sa carte graphique ici : un modèle plus petit tournera sur le processeur, plus lentement et avec un résumé plus simple.";
+    const ok = await new Promise(done => { dlg.onclose = () => done(dlg.returnValue === "ok"); dlg.returnValue = ""; dlg.showModal(); });
+    if (!ok) return say("Résumé IA annulé.");
+    try { localStorage.setItem(AI_OK, device); } catch {}
+  }
+  const text = await documentText();
+  if (text === undefined) return;
+  const name = doc.name, view = showSummary(`Résumé IA : ${name}`);
+  summarizing = true;
+  let stopper = null;
+  $("#resume-dlg").onclose = () => stopper?.interrupt();
+  const t0 = Date.now();
+  try {
+    let engine;
+    try { engine = await loadAi(view, device); }
+    catch (e) {
+      if (device !== "webgpu") throw e;
+      console.error(e);                                  // carte graphique refusée : on passe au processeur
+      engine = await loadAi(view, "wasm");
+    }
+    const { T, generator } = engine;
+    const run = async (messages, label, max_new_tokens) => {
+      if (!view.open()) throw new Error("annulé");
+      stopper = new T.InterruptableStoppingCriteria();
+      let out = "";
+      const streamer = new T.TextStreamer(generator.tokenizer, { skip_prompt: true, skip_special_tokens: true,
+        callback_function: t => { out += t; view.text(out); } });
+      view.state(label);
+      const res = await generator(messages, { max_new_tokens, do_sample: false, streamer, stopping_criteria: stopper });
+      if (!view.open()) throw new Error("annulé");
+      return (res[0].generated_text.at(-1).content || out).trim();
+    };
+    const chunks = core.summaryChunks(text, engine.device === "webgpu" ? 6000 : 3000);
+    let result;
+    if (chunks.length === 1) result = await run(core.summaryMessages(name, chunks[0]), "Rédaction de la synthèse…", 700);
+    else {
+      const partials = [];
+      for (const [k, c] of chunks.entries())
+        partials.push(await run(core.summaryMessages(name, c, k + 1, chunks.length), `Lecture de la partie ${k + 1} sur ${chunks.length}…`, 350));
+      result = await run(core.finalMessages(name, partials), "Rédaction de la synthèse finale…", 700);
+    }
+    view.text(result);
+    const min = Math.round((Date.now() - t0) / 60000);
+    view.state(`Synthèse rédigée sur ce PC en ${min < 1 ? "moins d'une minute" : plural(min, "minute")}. Une IA peut se tromper : vérifiez les chiffres dans le document.`);
+    say("Résumé IA prêt.");
+  } catch (e) {
+    if (e.message === "annulé" || !view.open()) say("Résumé IA interrompu.");
+    else { console.error(e); view.state("Erreur : " + (e.message || e)); say("Erreur pendant le résumé IA : " + (e.message || e), true); }
+  } finally { summarizing = false; }
 }
 
 // Glisser-déposer des miniatures pour changer l'ordre des pages.
@@ -1328,6 +1451,10 @@ $("#append-pdf").onclick = () => pickInsert(true);
 $("#extract-pages").onclick = extractPages;
 $("#split-bookmarks").onclick = splitByBookmarks;
 $("#copilot").onclick = sendToCopilot;
+$("#resume-rapide").onclick = quickResume;
+$("#resume-ia").onclick = aiResume;
+$("#resume-copy").onclick = async () => say(await copyText($("#resume-text").textContent) ? "Résumé copié." : "La copie a échoué.", false);
+$("#resume-save").onclick = async () => say(await download(new Blob([$("#resume-text").textContent], { type: "text/plain;charset=utf-8" }), `${doc.name} - résumé.txt`, "text/plain"));
 $("#number-pages").onclick = numberPages;
 $("#watermark").onclick = addWatermark;
 $("#close").onclick = () => closeDoc();

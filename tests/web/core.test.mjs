@@ -556,3 +556,31 @@ test("bandeau des signatures : intacte, ajouts, modifiée, format inconnu", () =
   assert.equal(core.signatureSummary([{ ...s, intact: null }]).level, "warn");
   assert.equal(core.signatureSummary([]).level, "warn");
 });
+
+test("résumé rapide : phrases clés, montants et dates", () => {
+  const text = "--- Page 1 ---\nContrat de maintenance informatique entre la société Alpha et la société Beta.\n" +
+    "Le contrat de maintenance couvre les serveurs et les postes de la société Beta pendant trois ans.\n" +
+    "Montant annuel | 12 500,00 €\nDate de signature | 15/03/2026\n\n--- Page 2 ---\n" +
+    "La société Alpha intervient sous quatre heures en cas de panne des serveurs couverts par le contrat.\n" +
+    "Le paiement est dû à trente jours, faute de quoi des pénalités de retard sont appliquées.";
+  const r = core.quickSummary(text, 3);
+  assert.equal(r.points.length, 3);
+  assert.ok(r.points.every(p => text.includes(p)));
+  assert.ok(r.figures.includes("Montant annuel 12 500,00 €"));
+  assert.ok(r.figures.includes("Date de signature 15/03/2026"));
+  assert.match(core.summaryText(r), /^Points clés :\n• /);
+  assert.deepEqual(core.quickSummary(""), { points: [], figures: [] });
+});
+
+test("morceaux pour le modèle : coupés entre les pages, jamais trop longs", () => {
+  const page = n => `--- Page ${n} ---\n` + "ligne de texte assez longue pour remplir\n".repeat(40);
+  const text = [1, 2, 3, 4].map(page).join("\n\n");
+  const chunks = core.summaryChunks(text, 3500);
+  assert.ok(chunks.length >= 2 && chunks.every(c => c.length <= 3500));
+  assert.ok(chunks.every(c => c.startsWith("--- Page")));
+  assert.equal(chunks.join("\n\n").replace(/\s+/g, ""), text.replace(/\s+/g, ""));
+  const one = core.summaryMessages("Facture", "texte");
+  assert.equal(one[0].role, "system"); assert.match(one[1].content, /objet du document/);
+  assert.match(core.summaryMessages("Facture", "texte", 2, 3)[1].content, /partie 2 sur 3/);
+  assert.match(core.finalMessages("Facture", ["a", "b"])[1].content, /Partie 2 :\nb/);
+});
