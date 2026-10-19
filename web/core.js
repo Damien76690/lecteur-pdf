@@ -1553,3 +1553,83 @@ export function signatureSummary(sigs) {
   const added = !sigs.some(s => s.covers);
   return { level: "ok", text: `${intro} : document intact${added ? " (des commentaires ont été ajoutés après la signature)" : ""}.` };
 }
+
+// --- Synthèse sur ce PC (rien n'est envoyé) ---
+
+const STOP = new Set(("les des une est que qui dans pour par sur avec aux ses son sont pas plus ont ces cette " +
+  "été être avoir fait leur leurs nous vous ils elles mais ou donc car tout tous toute toutes comme entre " +
+  "sans sous ainsi elle lui aussi peut même dont the and for are this that with from have").split(" "));
+const AMOUNT = /\d[\d\s  .]*,\d{2}\s?(?:€|eur)|\d{1,3}(?:[\s  ]\d{3})+(?:,\d+)?|\d+(?:,\d+)?\s?(?:€|%)/i;
+const DATE = /\b\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}\b|\b\d{1,2}(?:er)?\s+(?:janvier|février|fevrier|mars|avril|mai|juin|juillet|août|aout|septembre|octobre|novembre|décembre|decembre)\s+\d{4}\b/i;
+const KEY = /total|montant|net à payer|net a payer|solde|échéance|echeance|résultat|resultat|chiffre d.affaires|capital|capitaux propres|prix|tva|date limite|à payer|a payer/i;
+
+// Résumé rapide d'un texte (voir documentText) sans intelligence artificielle : les phrases qui
+// portent les mots les plus fréquents du document, et les lignes avec des montants ou des dates.
+export function quickSummary(text, count = 8) {
+  const lines = text.split("\n").filter(l => !/^--- Page \d+ ---$/.test(l)).map(l => l.replace(/ \| /g, " ").replace(/\s+/g, " ").trim()).filter(Boolean);
+  const sentences = [];
+  for (const l of lines)
+    for (const s of l.split(/(?<=[.!?;])\s+(?=[A-ZÀ-Ý«"])/)) if (s.length >= 40 && s.length <= 400 && /[a-zà-ÿ]{3}/.test(s)) sentences.push(s);
+  const words = s => (plain(s).match(/[a-z]{3,}/g) || []).filter(w => !STOP.has(w));
+  const freq = new Map();
+  for (const s of sentences) for (const w of new Set(words(s))) freq.set(w, (freq.get(w) || 0) + 1);
+  const scored = sentences.map((s, k) => {
+    const ws = words(s);
+    return { s, k, score: ws.reduce((t, w) => t + (freq.get(w) || 0), 0) / Math.sqrt(ws.length || 1) + (k < 3 ? 2 : 0) };
+  });
+  const seen = new Set();
+  const points = scored.sort((a, b) => b.score - a.score).filter(x => {
+    const key = plain(x.s).slice(0, 60);
+    return !seen.has(key) && seen.add(key);
+  }).slice(0, count).sort((a, b) => a.k - b.k).map(x => x.s);
+  const figures = [];
+  for (const l of lines) {
+    if (figures.length >= 12) break;
+    if (l.length > 160 || points.includes(l) || figures.includes(l)) continue;
+    if ((KEY.test(l) && /\d/.test(l)) || (AMOUNT.test(l) && /[a-zà-ÿ]{3}/i.test(l)) || DATE.test(l)) figures.push(l);
+  }
+  return { points, figures };
+}
+
+export function summaryText({ points, figures }) {
+  const list = items => items.map(t => `• ${t}`).join("\n");
+  return [points.length ? `Points clés :\n${list(points)}` : "",
+          figures.length ? `Chiffres et dates repérés :\n${list(figures)}` : ""].filter(Boolean).join("\n\n");
+}
+
+// Découpe un texte (voir documentText) en morceaux d'au plus `max` caractères, de préférence
+// entre deux pages, sinon entre deux lignes.
+export function summaryChunks(text, max = 6000) {
+  const chunks = [];
+  let cur = "";
+  const push = () => { if (cur.trim()) chunks.push(cur.trim()); cur = ""; };
+  for (const page of text.split(/\n\n(?=--- Page \d+ ---)/)) {
+    if (cur && cur.length + page.length + 2 > max) push();
+    if (page.length <= max) { cur += (cur ? "\n\n" : "") + page; continue; }
+    for (const line of page.split("\n")) {
+      if (cur && cur.length + line.length + 1 > max) push();
+      cur += (cur ? "\n" : "") + line.slice(0, max);
+    }
+  }
+  push();
+  return chunks;
+}
+
+const SYSTEM = "Tu es un assistant qui résume des documents en français. Tu t'appuies uniquement sur le texte fourni, " +
+  "sans rien inventer, et tu recopies les montants et les dates exactement.";
+const FINAL = "Rédige une synthèse claire en français : l'objet du document en une phrase, puis les points clés, " +
+  "les chiffres importants (montants, dates, échéances) et ce qui demande une action ou une vigilance. Utilise des puces.";
+
+// Messages pour le modèle de langue : un résumé par morceau, puis une synthèse des résumés.
+export function summaryMessages(name, chunk, part = 1, parts = 1) {
+  const ask = parts === 1 ? `${FINAL}\n\nDocument « ${name} » :\n\n${chunk}`
+    : `Voici la partie ${part} sur ${parts} du document « ${name} ». Résume-la en quelques puces ` +
+      `(points clés, montants, dates, échéances), sans introduction.\n\n${chunk}`;
+  return [{ role: "system", content: SYSTEM }, { role: "user", content: ask }];
+}
+
+export function finalMessages(name, partials) {
+  const all = partials.map((p, k) => `Partie ${k + 1} :\n${p}`).join("\n\n");
+  return [{ role: "system", content: SYSTEM },
+          { role: "user", content: `Voici les résumés successifs des parties du document « ${name} ».\n\n${all}\n\n${FINAL}` }];
+}

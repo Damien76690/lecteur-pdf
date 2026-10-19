@@ -41,6 +41,7 @@ Les commandes sont rangées dans des onglets, comme dans Word : **Fichier**, **A
 | Un PDF par partie (Bilan, Compte de résultat, Annexe…) | **Pages › Découper par signets** : cochez les signets qui commencent chaque partie (dossier choisi dans l'application Windows, fichier ZIP en ligne) |
 | Un seul tableau vers Excel | **Convertir › Tableau vers Excel**, puis encadrez le tableau sur la page (un scan est lu automatiquement) |
 | Synthèse par Copilot | **Synthèse › Envoyer à Copilot** : Mim PDF copie votre demande et le texte du document, puis ouvre Copilot ; collez (Ctrl+V) et envoyez. Le texte part alors chez Microsoft |
+| Résumé sur ce PC | **Synthèse › Résumé rapide** : phrases clés, montants et dates, instantané. **Synthèse › Résumé IA** : synthèse rédigée par un modèle libre (Qwen) qui tourne sur l'ordinateur ; il est téléchargé une seule fois (1,2 Go, ou 0,5 Go sans carte graphique compatible), le document n'est jamais envoyé, c'est gratuit |
 | PDF signé (Docusign, certificat…) | Un bandeau le signale dès l'ouverture : vert si le document est intact, rouge s'il a été modifié après la signature (**Détails** pour en savoir plus) |
 | Ajouter une page blanche, insérer un autre PDF, fusionner | **Pages › Page blanche / Insérer un PDF / Fusionner** (insérer : après la page affichée ; fusionner : à la fin) |
 | Extraire des pages dans un nouveau PDF | **Pages › Extraire des pages**, puis par exemple `1-3, 5` : le résultat s'ouvre dans un nouvel onglet |

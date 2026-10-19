@@ -107,7 +107,9 @@
   #split-list { max-height:45vh; overflow:auto; border:1px solid var(--border); border-radius:8px; padding:4px 8px; margin:8px 0; }
   #split-list label { display:flex; gap:6px; align-items:baseline; padding:2px 0; font-size:13px; }
   #split-list small { color:var(--muted); margin-left:auto; white-space:nowrap; }
-  #copilot-dlg { width:520px; }
+  #copilot-dlg { width:520px; } #ia-dlg { width:480px; }
+  #resume-dlg { width:640px; }
+  #resume-text { white-space:pre-wrap; max-height:55vh; overflow:auto; border:1px solid var(--border); border-radius:8px; padding:8px 10px; margin:8px 0; font-size:13px; line-height:1.45; min-height:80px; }
   #find { width:140px; } #find-count { color:var(--muted); font-size:12px; min-width:64px; text-align:center; }
   #side { position:sticky; top:calc(var(--head, 150px) + 8px); width:230px; flex:none; max-height:calc(100vh - var(--head, 150px) - 20px); display:flex; flex-direction:column;
           margin:8px 0 0 12px; background:var(--panel); border:1px solid var(--border); border-radius:10px; overflow:hidden; }
@@ -354,6 +356,10 @@
       <div class="group"><div class="tools">
         <button class="big" id="copilot" title="Copier le texte du document et ouvrir Copilot pour lui demander une synthèse"><span class="ic">✦</span>Envoyer à Copilot</button>
       </div><span class="gl">Assistant Microsoft</span></div>
+      <div class="group"><div class="tools">
+        <button class="big" id="resume-rapide" title="Phrases clés, montants et dates du document, en un instant"><span class="ic">≡</span>Résumé rapide</button>
+        <button class="big" id="resume-ia" title="Synthèse rédigée par une intelligence artificielle qui tourne sur ce PC"><span class="ic">✎</span>Résumé IA</button>
+      </div><span class="gl">Sur ce PC, rien n'est envoyé</span></div>
     </section>
   </div>
   <div id="maj" hidden>
@@ -475,6 +481,23 @@
     <p class="hint">Mim PDF copie votre demande et le texte du document, puis ouvre Copilot : collez-les (Ctrl+V) et envoyez.
       Le texte est alors transmis à Microsoft, comme tout ce que vous écrivez dans Copilot.</p>
     <div class="actions"><button value="cancel">Annuler</button><button value="ok" class="primary">Copier et ouvrir Copilot</button></div>
+  </form>
+</dialog>
+<dialog id="ia-dlg">
+  <form method="dialog">
+    <h3>Résumé par intelligence artificielle sur ce PC</h3>
+    <p>Mim PDF va télécharger une seule fois un modèle de langue libre (Qwen, <span id="ia-size"></span>) depuis Hugging Face.
+      Ensuite, tout se passe sur cet ordinateur : le document n'est jamais envoyé, et c'est gratuit.</p>
+    <p class="hint" id="ia-device"></p>
+    <div class="actions"><button value="cancel">Annuler</button><button value="ok" class="primary">Télécharger et résumer</button></div>
+  </form>
+</dialog>
+<dialog id="resume-dlg">
+  <form method="dialog">
+    <h3 id="resume-title">Résumé</h3>
+    <p class="hint" id="resume-state"></p>
+    <div id="resume-text"></div>
+    <div class="actions"><button type="button" id="resume-copy">Copier</button><button type="button" id="resume-save">Enregistrer en texte</button><button value="ok" class="primary">Fermer</button></div>
   </form>
 </dialog>
 <dialog id="split-dlg">
