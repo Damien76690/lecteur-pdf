@@ -552,3 +552,89 @@ test("signer avec un certificat, vérifier, puis détecter une modification", ()
   assert.ok(both.every(s => s.intact));
 });
 const latin1 = b => new TextDecoder("latin1").decode(b);
+
+test("Excel d'un tableau encadré : seul le contenu de la zone est exporté", () => {
+  // Le tableau de la facture occupe x 72-532, y 140-236 (points tels qu'affichés).
+  const pages = core.extractRows(facture(), { page: 0, rect: [532, 236, 70, 138] });
+  assert.equal(pages.length, 1);
+  const wb = XLSX.read(core.toXlsx(XLSX, pages));
+  const rows = XLSX.utils.sheet_to_json(wb.Sheets["Page 1"], { header: 1 });
+  assert.deepEqual(rows[0], ["Article", "Quantité", "Prix unitaire", "Total"]);
+  assert.deepEqual(rows[1], ["Papier A4", 10, 4.5, 45]);
+  assert.equal(rows.length, 4);
+  assert.doesNotMatch(JSON.stringify(rows), /Facture|Dupont|Total à payer/);
+  assert.deepEqual(core.extractRows(facture(), { page: 0, rect: [300, 600, 400, 700] }), [[]]);
+});
+
+test("texte du document pour Copilot : une partie par page, cases séparées", () => {
+  const t = core.documentText(core.extractRows(facture()));
+  assert.match(t, /^--- Page 1 ---\nFacture n° 2026-042/);
+  assert.match(t, /Papier A4 \| 10 \| 4,50 \| 45,00/);
+});
+
+test("découper par signets : une partie par signet choisi", () => {
+  const outline = [{ title: "---------- BILAN ----------", page: 2, level: 0 }, { title: "Bilan Actif", page: 2, level: 1 },
+                   { title: "Bilan Passif", page: 4, level: 1 }, { title: "Annexe", page: 9, level: 0 }, { title: "Lien", page: -1, level: 0 }];
+  assert.deepEqual(core.bookmarkParts(outline, 12, [0, 3]),
+    [{ title: "Début", from: 0, to: 1 }, { title: "BILAN", from: 2, to: 8 }, { title: "Annexe", from: 9, to: 11 }]);
+  assert.deepEqual(core.bookmarkParts(outline, 12).map(p => [p.title, p.from, p.to]),
+    [["Début", 0, 1], ["BILAN - Bilan Actif", 2, 3], ["Bilan Passif", 4, 8], ["Annexe", 9, 11]]);
+  assert.deepEqual(core.bookmarkParts([], 3), []);
+  assert.equal(core.fileName('01 - Bilan: "actif"?'), "01 - Bilan actif");
+});
+
+test("archive ZIP lisible : noms accentués, contenus intacts", () => {
+  const files = [{ name: "01 - Début.pdf", bytes: facture() }, { name: "02 - Été.txt", bytes: new TextEncoder().encode("bonjour") }];
+  const z = core.zip(files), v = new DataView(z.buffer, z.byteOffset);
+  assert.equal(v.getUint32(0, true), 0x04034b50);
+  const end = z.length - 22;
+  assert.equal(v.getUint32(end, true), 0x06054b50);
+  assert.equal(v.getUint16(end + 10, true), 2);
+  // Relit chaque fichier depuis le répertoire central.
+  let at = v.getUint32(end + 16, true);
+  for (const f of files) {
+    assert.equal(v.getUint32(at, true), 0x02014b50);
+    const n = v.getUint16(at + 28, true), size = v.getUint32(at + 24, true), local = v.getUint32(at + 42, true);
+    assert.equal(new TextDecoder().decode(z.subarray(at + 46, at + 46 + n)), f.name);
+    const ln = v.getUint16(local + 26, true);
+    assert.deepEqual(z.subarray(local + 30 + ln, local + 30 + ln + size), f.bytes);
+    at += 46 + n;
+  }
+});
+
+test("bandeau des signatures : intacte, ajouts, modifiée, format inconnu", () => {
+  const s = { name: "DocuSign", date: "2026-03-12T10:00:00.000Z", intact: true, covers: true };
+  assert.deepEqual(core.signatureSummary([s]), { level: "ok", text: "Signé électroniquement par DocuSign le 12/03/2026 : document intact." });
+  assert.match(core.signatureSummary([{ ...s, covers: false }]).text, /commentaires ont été ajoutés/);
+  assert.equal(core.signatureSummary([{ ...s, intact: false }]).level, "bad");
+  assert.equal(core.signatureSummary([{ ...s, intact: null }]).level, "warn");
+  assert.equal(core.signatureSummary([]).level, "warn");
+});
+
+test("résumé rapide : phrases clés, montants et dates", () => {
+  const text = "--- Page 1 ---\nContrat de maintenance informatique entre la société Alpha et la société Beta.\n" +
+    "Le contrat de maintenance couvre les serveurs et les postes de la société Beta pendant trois ans.\n" +
+    "Montant annuel | 12 500,00 €\nDate de signature | 15/03/2026\n\n--- Page 2 ---\n" +
+    "La société Alpha intervient sous quatre heures en cas de panne des serveurs couverts par le contrat.\n" +
+    "Le paiement est dû à trente jours, faute de quoi des pénalités de retard sont appliquées.";
+  const r = core.quickSummary(text, 3);
+  assert.equal(r.points.length, 3);
+  assert.ok(r.points.every(p => text.includes(p)));
+  assert.ok(r.figures.includes("Montant annuel 12 500,00 €"));
+  assert.ok(r.figures.includes("Date de signature 15/03/2026"));
+  assert.match(core.summaryText(r), /^Points clés :\n• /);
+  assert.deepEqual(core.quickSummary(""), { points: [], figures: [] });
+});
+
+test("morceaux pour le modèle : coupés entre les pages, jamais trop longs", () => {
+  const page = n => `--- Page ${n} ---\n` + "ligne de texte assez longue pour remplir\n".repeat(40);
+  const text = [1, 2, 3, 4].map(page).join("\n\n");
+  const chunks = core.summaryChunks(text, 3500);
+  assert.ok(chunks.length >= 2 && chunks.every(c => c.length <= 3500));
+  assert.ok(chunks.every(c => c.startsWith("--- Page")));
+  assert.equal(chunks.join("\n\n").replace(/\s+/g, ""), text.replace(/\s+/g, ""));
+  const one = core.summaryMessages("Facture", "texte");
+  assert.equal(one[0].role, "system"); assert.match(one[1].content, /objet du document/);
+  assert.match(core.summaryMessages("Facture", "texte", 2, 3)[1].content, /partie 2 sur 3/);
+  assert.match(core.finalMessages("Facture", ["a", "b"])[1].content, /Partie 2 :\nb/);
+});

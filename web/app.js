@@ -76,18 +76,38 @@ const modified = d => d.history.length !== (d.savedAt ?? 0);
 
 const plural = (n, word) => `${n} ${word}${n > 1 ? "s" : ""}`;
 
-// Bandeau d'information : document signé électroniquement, champs de formulaire.
+// Bandeau d'information : document signé électroniquement (contrôlé dès l'ouverture : vert si
+// intact, rouge s'il a été modifié), champs de formulaire, protection.
 function showInfo() {
-  const parts = [];
-  if (doc.signed) parts.push(core.keepsOriginal(doc.original, doc.bytes)
-    ? "🔏 Ce document est signé électroniquement. Vos commentaires, surlignages et signatures sont ajoutés sans toucher à la signature d'origine."
-    : "⚠ Ce document était signé électroniquement : vos modifications rendent cette signature invalide dans la copie enregistrée (le fichier d'origine n'est pas touché).");
-  if (doc.signed) parts.push("Détails : Signer › Signatures du document.");
+  const parts = [], info = $("#info");
+  let level = "";
+  if (doc.signed) {
+    const sum = doc.sigSummary;
+    if (!core.keepsOriginal(doc.original, doc.bytes)) {
+      level = "bad";
+      parts.push("⚠ Ce document était signé électroniquement : vos modifications rendent cette signature invalide dans la copie enregistrée (le fichier d'origine n'est pas touché).");
+    } else if (sum) {
+      level = sum.level === "warn" ? "" : sum.level;
+      parts.push({ ok: "✔ ", warn: "⚠ ", bad: "✖ " }[sum.level] + sum.text);
+      if (sum.level === "ok") parts.push("Vos commentaires et surlignages s'ajoutent sans toucher à la signature.");
+    } else parts.push("🔏 Ce document est signé électroniquement. Vos commentaires, surlignages et signatures sont ajoutés sans toucher à la signature d'origine.");
+  }
   if (doc.fields) parts.push(`Ce document contient ${plural(doc.fields, "champ")} de formulaire : cliquez dedans pour les remplir.`);
   if (doc.protection) parts.push("🔒 Le PDF enregistré sera protégé par " + (doc.protection.password ? "mot de passe." : "des restrictions (impression, copie ou modification).") +
     " Fichier › Protéger pour changer.");
-  $("#info").textContent = parts.join(" ");
-  $("#info").hidden = !parts.length;
+  info.textContent = parts.join(" ");
+  if (doc.signed) info.appendChild(Object.assign(document.createElement("button"), { textContent: "Détails", onclick: showCertSignatures }));
+  info.className = level;
+  info.hidden = !parts.length;
+}
+
+// Contrôle des signatures électroniques du document tel qu'ouvert, pour le bandeau.
+async function checkSignatures(d) {
+  try {
+    await loadScript(LIBS.forge);
+    d.sigSummary = core.signatureSummary(core.signatures(forge, d.original));
+  } catch (e) { return console.error(e); }
+  if (d === doc) showInfo();
 }
 
 // Demande le mot de passe d'un PDF protégé ; renvoie les octets déverrouillés, ou null si l'utilisateur abandonne.
@@ -128,6 +148,7 @@ async function openBytes(bytes, name) {
     if (innerWidth > 900) openSide(doc.outline.length ? "outline" : "thumbs");
   });
   showRecents();
+  if (doc?.signed && !doc.sigSummary) checkSignatures(doc);
   if (doc) say(`${doc.name} : ${plural(doc.pages.length, "page")}.` + (core.needsOcr(doc.pages)
     ? " Ce PDF semble être une image (scan) : cliquez sur « Reconnaître le texte (OCR) » pour pouvoir le modifier ou le convertir." : ""));
 }
@@ -658,7 +679,8 @@ async function certSign(i, rect) {
   if (modified(doc) && !confirm("Le document a des modifications non enregistrées : elles seront incluses dans ce que vous signez. Continuer ?")) return;
   const id = certId;
   await edit("Signature électronique…", b => core.signPdf(forge, b, id, { page: i, rect, ...certOptions }), () => {
-    doc.signed = true; doc.original = doc.bytes;
+    doc.signed = true; doc.original = doc.bytes; doc.sigSummary = null;
+    checkSignatures(doc);
     return `Document signé électroniquement par ${id.name}. Enregistrez-le maintenant (Ctrl+S) : ensuite, seuls des commentaires peuvent être ajoutés sans invalider la signature.`;
   });
 }
@@ -739,6 +761,240 @@ async function addWatermark() {
   if (text) edit("Filigrane…", b => core.watermark(b, text), `Filigrane « ${text} » posé sur toutes les pages.`);
 }
 
+// Un PDF par partie du document, d'après ses signets (Bilan, Compte de résultat, Annexe…).
+async function splitByBookmarks() {
+  const marks = doc.outline.map((o, k) => ({ ...o, k })).filter(o => o.page >= 0 && o.page < doc.pages.length);
+  if (!marks.length) return say("Ce document n'a pas de signets menant à une page : utilisez plutôt « Extraire des pages ».", true);
+  const top = Math.min(...marks.map(o => o.level)), list = $("#split-list");
+  list.innerHTML = "";
+  for (const o of marks) {
+    const row = document.createElement("label");
+    row.style.paddingLeft = 14 * (o.level - top) + "px";
+    row.innerHTML = "<input type=checkbox><span></span><small></small>";
+    Object.assign(row.querySelector("input"), { checked: o.level === top }).dataset.k = o.k;
+    row.querySelector("input").dataset.level = o.level;
+    row.querySelector("span").textContent = o.title;
+    row.querySelector("small").textContent = `p. ${o.page + 1}`;
+    list.appendChild(row);
+  }
+  const chosen = () => $$("#split-list input:checked").map(b => +b.dataset.k);
+  const count = () => {
+    const n = core.bookmarkParts(doc.outline, doc.pages.length, chosen()).length;
+    $("#split-count").textContent = n ? `Résultat : ${plural(n, "fichier")} PDF.` : "Cochez au moins un signet.";
+  };
+  const check = test => () => { $$("#split-list input").forEach(b => b.checked = test(b)); count(); };
+  list.onchange = count;
+  $("#split-main").onclick = check(b => +b.dataset.level === top);
+  $("#split-all").onclick = check(() => true);
+  $("#split-none").onclick = check(() => false);
+  count();
+  const dlg = $("#split-dlg");
+  const ok = await new Promise(done => { dlg.onclose = () => done(dlg.returnValue === "ok"); dlg.returnValue = ""; dlg.showModal(); });
+  if (!ok) return;
+  const parts = core.bookmarkParts(doc.outline, doc.pages.length, chosen());
+  if (parts.length < 2) return say(parts.length ? "Cela ne donnerait qu'un seul fichier : cochez des signets qui mènent à des pages différentes."
+                                                : "Aucun signet coché : rien à découper.", true);
+  await busy("Découpage…", async () => {
+    const files = [], digits = Math.max(2, String(parts.length).length);
+    for (const [k, p] of parts.entries()) {
+      say(`Découpage : partie ${k + 1} / ${parts.length}…`);
+      const bytes = await core.extractPages(doc.bytes, Array.from({ length: p.to - p.from + 1 }, (_, j) => p.from + j));
+      files.push({ name: `${String(k + 1).padStart(digits, "0")} - ${core.fileName(p.title)}.pdf`, bytes });
+    }
+    say(`${parts.length} fichiers PDF créés. ` + await saveMany(core.fileName(`${doc.name} - par signets`), files));
+  });
+}
+
+// Plusieurs fichiers d'un coup : dans un dossier choisi (application Windows) ou dans une archive ZIP.
+async function saveMany(folder, files) {
+  const api = window.pywebview?.api;
+  if (api?.enregistrer_dossier) {
+    const list = await Promise.all(files.map(async f => ({ nom: f.name, b64: await toBase64(f.bytes) })));
+    return (await api.enregistrer_dossier(folder, list)).message;
+  }
+  return download(core.zip(files), `${folder}.zip`, "application/zip");
+}
+
+// Exporte vers Excel le seul tableau encadré à la souris (`rect` en points tels qu'affichés).
+async function exportTable(i, rect) {
+  setMode("read");
+  await busy("Export du tableau…", async () => {
+    const scanned = !doc.pages[i].hasText;
+    if (scanned) {
+      say(`Page ${i + 1} scannée : lecture du texte avant l'export…`);
+      const before = doc.bytes;
+      commit(before, await ocr(before, [i]), "Texte reconnu.");
+    }
+    const pages = core.extractRows(doc.bytes, { page: i, rect });
+    if (!pages[0]?.length) throw new Error("aucun texte dans le cadre tracé. Tracez-le autour du tableau, du coin en haut à gauche au coin en bas à droite");
+    await loadScript(LIBS.xlsx);
+    let done = await download(core.toXlsx(XLSX, pages, [`Page ${i + 1}`]), `${doc.name} - tableau page ${i + 1}.xlsx`,
+                              "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    if (!/annulé/.test(done)) done = `Tableau exporté (${plural(pages[0].length, "ligne")}). ` + done +
+      (scanned ? " Le texte a été lu sur le scan : vérifiez les chiffres importants." : "");
+    say(done);
+  });
+}
+
+// ------------------------------------------------------------ synthèse : envoyer à Copilot
+
+// Mim PDF ne peut pas piloter Copilot (Microsoft ne le permet pas aux autres logiciels) : il copie
+// la demande et le texte du document, puis ouvre Copilot, où il suffit de coller.
+const COPILOT_ASK = "Fais une synthèse claire en français de ce document : son objet, les points clés, " +
+  "les chiffres importants (montants, dates, échéances) et ce qui demande une action ou une vigilance.";
+const COPILOT_LONG = 15000;   // au-delà, Copilot risque de ne lire que le début d'un texte collé
+// Texte de tout le document, après lecture des pages scannées. undefined en cas d'erreur (déjà affichée).
+async function documentText() {
+  const text = await busy("Préparation du texte…", async () => {
+    const scans = doc.pages.flatMap((p, i) => p.hasText ? [] : [i]);
+    if (scans.length) {
+      say(`Ce PDF est scanné : lecture du texte de ${plural(scans.length, "page")}…`);
+      const before = doc.bytes;
+      commit(before, await ocr(before, scans), "Texte reconnu.");
+    }
+    return core.documentText(core.extractRows(doc.bytes));
+  });
+  if (text !== undefined && !text.trim()) { say("Aucun texte trouvé dans ce document.", true); return; }
+  return text;
+}
+async function copyText(text) {
+  const api = window.pywebview?.api;
+  try { return api?.copier ? await api.copier(text) : (await navigator.clipboard.writeText(text), true); }
+  catch (e) { console.error(e); return false; }
+}
+
+async function sendToCopilot() {
+  const text = await documentText();
+  if (text === undefined) return;
+  const dlg = $("#copilot-dlg"), ask = $("#copilot-ask");
+  ask.value ||= COPILOT_ASK;
+  $("#copilot-size").textContent = `${doc.name}.pdf : ${plural(doc.pages.length, "page")}, ${text.length.toLocaleString("fr-FR")} caractères.` +
+    (text.length > COPILOT_LONG ? " Document long : Copilot risque de n'en lire que le début. Vous pouvez aussi lui joindre directement le fichier PDF (bouton + ou trombone de Copilot)." : "");
+  say("Vérifiez votre demande, puis cliquez sur « Copier et ouvrir Copilot ».");
+  const ok = await new Promise(done => { dlg.onclose = () => done(dlg.returnValue === "ok"); dlg.returnValue = ""; dlg.showModal(); });
+  if (!ok) return say("Envoi à Copilot annulé.");
+  const full = `${ask.value.trim() || COPILOT_ASK}\n\nDocument : ${doc.name}.pdf\n\n${text}`;
+  const api = window.pywebview?.api;
+  const copied = await copyText(full);
+  if (api?.ouvrir_copilot) await api.ouvrir_copilot();
+  else window.open("https://copilot.microsoft.com/", "_blank", "noopener");
+  say(copied ? "Texte copié et Copilot ouvert : cliquez dans sa zone de saisie, collez (Ctrl+V) puis envoyez."
+             : "Copilot est ouvert, mais la copie automatique a échoué : sélectionnez le texte (Ctrl+A) en mode Lecture et copiez-le (Ctrl+C).", !copied);
+}
+
+// Résumés faits sur ce PC : le rapide sans IA, l'autre avec un petit modèle de langue libre
+// (Qwen) exécuté dans la page par Transformers.js. Seul le modèle est téléchargé, une fois ;
+// le texte du document ne quitte jamais l'ordinateur.
+const TRANSFORMERS = "https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1/dist/transformers.min.js";
+const MODELS = {
+  webgpu: { id: "onnx-community/Qwen2.5-1.5B-Instruct", dtype: "q4f16", size: "1,2 Go" },   // carte graphique
+  wasm: { id: "onnx-community/Qwen2.5-0.5B-Instruct", dtype: "int8", size: "0,5 Go" },       // processeur seul
+};
+const AI_OK = "mim-resume-ia-accepte";
+let ai = null, summarizing = false;
+
+function showSummary(title) {
+  const dlg = $("#resume-dlg");
+  $("#resume-title").textContent = title;
+  $("#resume-text").textContent = ""; $("#resume-state").textContent = "";
+  if (!dlg.open) dlg.showModal();
+  return {
+    state: t => { $("#resume-state").textContent = t; },
+    text: t => { const box = $("#resume-text"); box.textContent = t; box.scrollTop = box.scrollHeight; },
+    open: () => dlg.open,
+  };
+}
+
+async function quickResume() {
+  const text = await documentText();
+  if (text === undefined) return;
+  const r = core.quickSummary(text);
+  const view = showSummary(`Résumé rapide : ${doc.name}`);
+  view.text(core.summaryText(r) || "Pas assez de phrases dans ce document pour en tirer un résumé.");
+  view.state("Phrases et chiffres repris tels quels du document, sans intelligence artificielle. Pour une synthèse rédigée, utilisez « Résumé IA ».");
+  say("Résumé rapide prêt.");
+}
+
+async function gpuOk() {
+  try { return !!(navigator.gpu && await navigator.gpu.requestAdapter()); } catch { return false; }
+}
+
+async function loadAi(view, device) {
+  if (ai?.device === device) return ai;
+  const T = await import(TRANSFORMERS).catch(() => { throw new Error("impossible de charger l'IA (vérifiez la connexion Internet pour ce premier usage)"); });
+  const m = MODELS[device], files = {};
+  const progress = p => {
+    if (p.status !== "progress" || !p.total) return;
+    files[p.file] = [p.loaded, p.total];
+    const [got, all] = Object.values(files).reduce(([a, b], [x, y]) => [a + x, b + y], [0, 0]);
+    view.state(`Téléchargement du modèle (une seule fois) : ${Math.floor(got / 1048576)} Mo sur ${Math.floor(all / 1048576)} Mo…`);
+  };
+  view.state("Préparation de l'intelligence artificielle…");
+  const generator = await T.pipeline("text-generation", m.id, { device, dtype: m.dtype, progress_callback: progress });
+  return ai = { T, generator, device };
+}
+
+async function aiResume() {
+  if (summarizing) return $("#resume-dlg").showModal();
+  const device = await gpuOk() ? "webgpu" : "wasm";
+  let accepted = false;
+  try { accepted = localStorage.getItem(AI_OK) === device; } catch {}
+  if (!accepted && !ai) {
+    const dlg = $("#ia-dlg");
+    $("#ia-size").textContent = MODELS[device].size;
+    $("#ia-device").textContent = device === "webgpu"
+      ? "La carte graphique de ce PC sera utilisée : comptez une à quelques minutes selon la longueur du document."
+      : "Ce PC ne permet pas d'utiliser sa carte graphique ici : un modèle plus petit tournera sur le processeur, plus lentement et avec un résumé plus simple.";
+    const ok = await new Promise(done => { dlg.onclose = () => done(dlg.returnValue === "ok"); dlg.returnValue = ""; dlg.showModal(); });
+    if (!ok) return say("Résumé IA annulé.");
+    try { localStorage.setItem(AI_OK, device); } catch {}
+  }
+  const text = await documentText();
+  if (text === undefined) return;
+  const name = doc.name, view = showSummary(`Résumé IA : ${name}`);
+  summarizing = true;
+  let stopper = null;
+  $("#resume-dlg").onclose = () => stopper?.interrupt();
+  const t0 = Date.now();
+  try {
+    let engine;
+    try { engine = await loadAi(view, device); }
+    catch (e) {
+      if (device !== "webgpu") throw e;
+      console.error(e);                                  // carte graphique refusée : on passe au processeur
+      engine = await loadAi(view, "wasm");
+    }
+    const { T, generator } = engine;
+    const run = async (messages, label, max_new_tokens) => {
+      if (!view.open()) throw new Error("annulé");
+      stopper = new T.InterruptableStoppingCriteria();
+      let out = "";
+      const streamer = new T.TextStreamer(generator.tokenizer, { skip_prompt: true, skip_special_tokens: true,
+        callback_function: t => { out += t; view.text(out); } });
+      view.state(label);
+      const res = await generator(messages, { max_new_tokens, do_sample: false, streamer, stopping_criteria: stopper });
+      if (!view.open()) throw new Error("annulé");
+      return (res[0].generated_text.at(-1).content || out).trim();
+    };
+    const chunks = core.summaryChunks(text, engine.device === "webgpu" ? 6000 : 3000);
+    let result;
+    if (chunks.length === 1) result = await run(core.summaryMessages(name, chunks[0]), "Rédaction de la synthèse…", 700);
+    else {
+      const partials = [];
+      for (const [k, c] of chunks.entries())
+        partials.push(await run(core.summaryMessages(name, c, k + 1, chunks.length), `Lecture de la partie ${k + 1} sur ${chunks.length}…`, 350));
+      result = await run(core.finalMessages(name, partials), "Rédaction de la synthèse finale…", 700);
+    }
+    view.text(result);
+    const min = Math.round((Date.now() - t0) / 60000);
+    view.state(`Synthèse rédigée sur ce PC en ${min < 1 ? "moins d'une minute" : plural(min, "minute")}. Une IA peut se tromper : vérifiez les chiffres dans le document.`);
+    say("Résumé IA prêt.");
+  } catch (e) {
+    if (e.message === "annulé" || !view.open()) say("Résumé IA interrompu.");
+    else { console.error(e); view.state("Erreur : " + (e.message || e)); say("Erreur pendant le résumé IA : " + (e.message || e), true); }
+  } finally { summarizing = false; }
+}
+
 // Glisser-déposer des miniatures pour changer l'ordre des pages.
 function dragThumbs(b, i) {
   b.draggable = true;
@@ -778,7 +1034,7 @@ function askText(label = "Texte à écrire :", ok = "Écrire") {
 }
 
 // Outils « glisser » (on trace une zone ou un trait) et outils « clic » (on pose quelque chose).
-const DRAG = ["erase", "highlight", "underline", "strike", "ink", "rect", "ellipse", "arrow"];
+const DRAG = ["erase", "table", "highlight", "underline", "strike", "ink", "rect", "ellipse", "arrow"];
 const SVG = "http://www.w3.org/2000/svg";
 const drawColor = () => $("#draw-color").value, drawWidth = () => +$("#draw-width").value;
 const textSize = () => Math.min(Math.max(+$("#size").value || 12, 4), 96);
@@ -799,8 +1055,8 @@ function attachTools(div, i, p) {
     svg.setAttribute("preserveAspectRatio", "none");
     const tag = { ink: "polyline", arrow: "line", ellipse: "ellipse" }[mode] || "rect";
     shape = svg.appendChild(document.createElementNS(SVG, tag));
-    const color = mode === "erase" ? "#dc2626" : mode === "highlight" ? $("#hl-color").value : drawColor();
-    const marker = ["highlight", "underline", "strike", "erase"].includes(mode);
+    const color = mode === "erase" ? "#dc2626" : mode === "table" ? "#16a34a" : mode === "highlight" ? $("#hl-color").value : drawColor();
+    const marker = ["highlight", "underline", "strike", "erase", "table"].includes(mode);
     shape.setAttribute("fill", marker ? color : "none");
     shape.setAttribute("fill-opacity", ".3");
     shape.setAttribute("stroke", color);
@@ -828,6 +1084,7 @@ function attachTools(div, i, p) {
     if (e.type === "pointercancel" || (tiny && mode !== "highlight" && mode !== "underline" && mode !== "strike")) return;
     if (mode === "erase")
       return edit("Effacement…", bytes => core.whiteout(bytes, i, a[0], a[1], b[0], b[1]), "Zone effacée.");
+    if (mode === "table") return exportTable(i, [...a, ...b]);
     const spec = { kind: mode, color: drawColor(), width: drawWidth() };
     if (["highlight", "underline", "strike"].includes(mode))
       Object.assign(spec, { from: a, to: b, color: mode === "highlight" ? $("#hl-color").value : drawColor() });
@@ -1064,17 +1321,14 @@ async function ocr(_, only = doc.pages.map((p, i) => i)) {
 // ------------------------------------------------------------ enregistrement
 
 // Dans l'application Windows, la fenêtre d'enregistrement de Windows remplace le téléchargement.
+const toBase64 = data => new Promise(ok => {
+  const r = new FileReader();
+  r.onload = () => ok(String(r.result).split(",")[1]);
+  r.readAsDataURL(data instanceof Blob ? data : new Blob([data]));
+});
 async function download(data, name, type) {
-  const blob = data instanceof Blob ? data : new Blob([data], { type });
   const api = window.pywebview?.api;
-  if (api?.enregistrer) {
-    const b64 = await new Promise(ok => {
-      const r = new FileReader();
-      r.onload = () => ok(String(r.result).split(",")[1]);
-      r.readAsDataURL(blob);
-    });
-    return (await api.enregistrer(name, b64)).message;
-  }
+  if (api?.enregistrer) return (await api.enregistrer(name, await toBase64(data))).message;
   const url = URL.createObjectURL(data instanceof Blob ? data : new Blob([data], { type }));
   const a = Object.assign(document.createElement("a"), { href: url, download: name });
   document.body.appendChild(a); a.click(); a.remove();
@@ -1126,6 +1380,7 @@ async function save(fmt) {
 
 const HINTS = { read: "Mode lecture.", text: "Cliquez sur la page à l'endroit où écrire.",
                 erase: "Tracez un rectangle sur la zone à effacer (son contenu sera réellement supprimé).",
+                table: "Encadrez le tableau à exporter vers Excel : faites glisser de son coin en haut à gauche à son coin en bas à droite.",
                 highlight: "Faites glisser sur le texte à surligner.", underline: "Faites glisser sur le texte à souligner.",
                 strike: "Faites glisser sur le texte à barrer.", note: "Cliquez à l'endroit où poser la note.",
                 textbox: "Cliquez à l'endroit où ajouter la zone de texte.", ink: "Dessinez à main levée sur la page.",
@@ -1194,6 +1449,12 @@ $("#from-images").onclick = () => $("#images-file").click();
 $("#insert-pdf").onclick = () => pickInsert(false);
 $("#append-pdf").onclick = () => pickInsert(true);
 $("#extract-pages").onclick = extractPages;
+$("#split-bookmarks").onclick = splitByBookmarks;
+$("#copilot").onclick = sendToCopilot;
+$("#resume-rapide").onclick = quickResume;
+$("#resume-ia").onclick = aiResume;
+$("#resume-copy").onclick = async () => say(await copyText($("#resume-text").textContent) ? "Résumé copié." : "La copie a échoué.", false);
+$("#resume-save").onclick = async () => say(await download(new Blob([$("#resume-text").textContent], { type: "text/plain;charset=utf-8" }), `${doc.name} - résumé.txt`, "text/plain"));
 $("#number-pages").onclick = numberPages;
 $("#watermark").onclick = addWatermark;
 $("#close").onclick = () => closeDoc();

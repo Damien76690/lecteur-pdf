@@ -101,6 +101,15 @@
   #info { display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:8px 12px; background:#fffbeb;
           border-bottom:1px solid #fde68a; color:#78350f; }
   #info button { padding:2px 8px; font-size:12px; }
+  #info.ok { background:#f0fdf4; border-bottom-color:#bbf7d0; color:#14532d; }
+  #info.bad { background:#fef2f2; border-bottom-color:#fecaca; color:#7f1d1d; }
+  .mode-table .page img { cursor:crosshair; } .mode-table .page { touch-action:none; }
+  #split-list { max-height:45vh; overflow:auto; border:1px solid var(--border); border-radius:8px; padding:4px 8px; margin:8px 0; }
+  #split-list label { display:flex; gap:6px; align-items:baseline; padding:2px 0; font-size:13px; }
+  #split-list small { color:var(--muted); margin-left:auto; white-space:nowrap; }
+  #copilot-dlg { width:520px; } #ia-dlg { width:480px; }
+  #resume-dlg { width:640px; }
+  #resume-text { white-space:pre-wrap; max-height:55vh; overflow:auto; border:1px solid var(--border); border-radius:8px; padding:8px 10px; margin:8px 0; font-size:13px; line-height:1.45; min-height:80px; }
   #find { width:140px; } #find-count { color:var(--muted); font-size:12px; min-width:64px; text-align:center; }
   #side { position:sticky; top:calc(var(--head, 150px) + 8px); width:230px; flex:none; max-height:calc(100vh - var(--head, 150px) - 20px); display:flex; flex-direction:column;
           margin:8px 0 0 12px; background:var(--panel); border:1px solid var(--border); border-radius:10px; overflow:hidden; }
@@ -177,6 +186,7 @@
       <button role="tab" data-tab="modifier">Modifier</button>
       <button role="tab" data-tab="pages">Pages</button>
       <button role="tab" data-tab="convertir">Convertir</button>
+      <button role="tab" data-tab="synthese">Synthèse</button>
     </nav>
     <span id="docname"></span>
   </div>
@@ -317,6 +327,7 @@
         <button class="big" id="insert-pdf" title="Insérer les pages d'autres PDF après la page affichée"><span class="ic">📥</span>Insérer un PDF</button>
         <button class="big" id="append-pdf" title="Ajouter d'autres PDF à la fin (fusionner)"><span class="ic">🔗</span>Fusionner</button>
         <button class="big" id="extract-pages" title="Créer un nouveau PDF avec certaines pages"><span class="ic">✂</span>Extraire des pages</button>
+        <button class="big" id="split-bookmarks" title="Un PDF par partie du document, d'après ses signets (Bilan, Compte de résultat, Annexe…)"><span class="ic">🔖</span>Découper par signets</button>
       </div><span class="gl">Organiser (glissez les miniatures pour changer l'ordre)</span></div>
       <div class="group"><div class="tools">
         <button class="big" id="number-pages" title="Ajouter les numéros de page"><span class="ic">#</span>Numéroter</button>
@@ -327,6 +338,7 @@
       <div class="group"><div class="tools">
         <button class="big" data-dl="docx"><span class="ic">W</span>Word</button>
         <button class="big" data-dl="xlsx"><span class="ic">X</span>Excel</button>
+        <button class="big" data-mode="table" title="Encadrez un tableau sur la page : il est exporté seul vers Excel"><span class="ic">⊞</span>Tableau vers Excel</button>
         <button class="big" data-dl="txt"><span class="ic">T</span>Texte</button>
         <button class="big" data-dl="pdf"><span class="ic">📄</span>PDF</button>
       </div><span class="gl">Enregistrer au format</span></div>
@@ -339,6 +351,15 @@
         <button class="big" id="compress" title="Réduire le poids du PDF (images allégées, fichier nettoyé)"><span class="ic">🗜</span>Compresser</button>
         <button class="big" id="flatten" title="Fixer commentaires et champs remplis dans les pages"><span class="ic">▤</span>Aplatir</button>
       </div><span class="gl">Optimiser</span></div>
+    </section>
+    <section data-panel="synthese" hidden>
+      <div class="group"><div class="tools">
+        <button class="big" id="copilot" title="Copier le texte du document et ouvrir Copilot pour lui demander une synthèse"><span class="ic">✦</span>Envoyer à Copilot</button>
+      </div><span class="gl">Assistant Microsoft</span></div>
+      <div class="group"><div class="tools">
+        <button class="big" id="resume-rapide" title="Phrases clés, montants et dates du document, en un instant"><span class="ic">≡</span>Résumé rapide</button>
+        <button class="big" id="resume-ia" title="Synthèse rédigée par une intelligence artificielle qui tourne sur ce PC"><span class="ic">✎</span>Résumé IA</button>
+      </div><span class="gl">Sur ce PC, rien n'est envoyé</span></div>
     </section>
   </div>
   <div id="maj" hidden>
@@ -449,6 +470,44 @@
     <label class="row">Lieu <input id="cert-location" type="text" placeholder="facultatif"></label>
     <label class="check"><input id="cert-visible" type="checkbox" checked> Afficher un cadre de signature sur la page</label>
     <div class="actions"><button value="cancel">Annuler</button><button value="ok" class="primary">Continuer</button></div>
+  </form>
+</dialog>
+<dialog id="copilot-dlg">
+  <form method="dialog">
+    <h3>Envoyer à Copilot</h3>
+    <label for="copilot-ask">Votre demande :</label>
+    <textarea id="copilot-ask"></textarea>
+    <p class="hint" id="copilot-size"></p>
+    <p class="hint">Mim PDF copie votre demande et le texte du document, puis ouvre Copilot : collez-les (Ctrl+V) et envoyez.
+      Le texte est alors transmis à Microsoft, comme tout ce que vous écrivez dans Copilot.</p>
+    <div class="actions"><button value="cancel">Annuler</button><button value="ok" class="primary">Copier et ouvrir Copilot</button></div>
+  </form>
+</dialog>
+<dialog id="ia-dlg">
+  <form method="dialog">
+    <h3>Résumé par intelligence artificielle sur ce PC</h3>
+    <p>Mim PDF va télécharger une seule fois un modèle de langue libre (Qwen, <span id="ia-size"></span>) depuis Hugging Face.
+      Ensuite, tout se passe sur cet ordinateur : le document n'est jamais envoyé, et c'est gratuit.</p>
+    <p class="hint" id="ia-device"></p>
+    <div class="actions"><button value="cancel">Annuler</button><button value="ok" class="primary">Télécharger et résumer</button></div>
+  </form>
+</dialog>
+<dialog id="resume-dlg">
+  <form method="dialog">
+    <h3 id="resume-title">Résumé</h3>
+    <p class="hint" id="resume-state"></p>
+    <div id="resume-text"></div>
+    <div class="actions"><button type="button" id="resume-copy">Copier</button><button type="button" id="resume-save">Enregistrer en texte</button><button value="ok" class="primary">Fermer</button></div>
+  </form>
+</dialog>
+<dialog id="split-dlg">
+  <form method="dialog">
+    <h3>Découper par signets</h3>
+    <p class="hint">Chaque signet coché commence un nouveau PDF, qui va jusqu'au signet coché suivant.</p>
+    <div class="seg"><button type="button" id="split-main">Parties principales</button><button type="button" id="split-all">Tout cocher</button><button type="button" id="split-none">Tout décocher</button></div>
+    <div id="split-list"></div>
+    <p class="hint" id="split-count"></p>
+    <div class="actions"><button value="cancel">Annuler</button><button value="ok" class="primary">Découper</button></div>
   </form>
 </dialog>
 <dialog id="sigs-dlg">
