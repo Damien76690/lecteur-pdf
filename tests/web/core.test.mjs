@@ -194,6 +194,60 @@ test("Excel d'un scan : titre sur deux lignes, bords d'une case de date, année 
   assert.ok(rows.some(r => r.join() === "31/12/2025"), JSON.stringify(rows));
 });
 
+// Comptes annuels d'un logiciel comptable et liasse fiscale en police à chasse fixe : repères invisibles,
+// titres de colonnes sur deux lignes, montants et codes collés, libellé sur deux lignes autour des montants.
+async function liasse() {
+  const d = await PDFLib.PDFDocument.create();
+  const font = await d.embedFont(PDFLib.StandardFonts.Courier);
+  const page = d.addPage([595, 842]);
+  const put = (t, x, y, size = 6) => page.drawText(t, { x, y, size, font });
+  const right = (t, end, y, size = 7.5) => put(t, end - font.widthOfTextAtSize(t, size), y, size);
+  put("findPageTitleBilanfindPageTitleEnd", 40, 820, 0.8);
+  put("Désignation de l'entreprise : AGIR PREVENTION ET SECURITE.M - SIREN : 501963698", 40, 800);
+  put("Exercice", 40, 812); put("2025", 480, 812);
+  put("Variation", 400, 772, 7.5); put("Postes", 40, 764, 7.5); put("Net 2025", 250, 764, 7.5); put("Net 2024", 320, 764, 7.5);
+  put("(€)", 410, 756, 7.5); put("(%)", 480, 764, 7.5);
+  put("Résultat", 40, 740, 7.5); right("2 000", 300, 740); right("41 979", 370, 740); right("-39 979 -113", 500, 740);
+  put("Brut", 268, 712);
+  [["Terrains", "KG", "0 KH", "0"], ["Matériel de transport", "KY", "4 724 KZ", "923"]].forEach(([label, code, mid, last], i) => {
+    const y = 700 - i * 14;
+    put(label, 40, y); put(code, 250, y, 7.5); right("0", 300, y); put(mid, 330, y, 7.5); right(last, 400, y);
+  });
+  put("Installations gales., agencts. et", 40, 663.5); put("aménag.", 40, 656.5);
+  put("S5", 250, 660, 7.5); right("12", 300, 660); put("S6", 330, 660, 7.5); right("0", 400, 660);
+  return d.save();
+}
+
+test("Excel : comptes annuels et liasse fiscale en texte natif", async () => {
+  const wb = XLSX.read(core.toXlsx(XLSX, core.extractRows(await liasse())), { cellNF: true });
+  const sheet = wb.Sheets["Page 1"];
+  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 }).map(r => Array.from(r, v => v ?? ""));
+  const all = rows.flat();
+  assert.ok(!all.some(v => /findPage/.test(v)), "repère invisible écarté");
+  // Une seule espace entre deux mots, même large (chasse fixe) : une seule case, le SIREN reste du texte.
+  assert.ok(all.some(v => /: AGIR PREVENTION ET SECURITE\.M - SIREN : 501963698$/.test(v)), JSON.stringify(rows));
+  const head = rows.find(r => r.includes("Postes"));
+  assert.ok(head.includes("Variation (€)") && head.includes("(%)"), JSON.stringify(head));
+  const year = head.indexOf("Net 2025");
+  assert.ok(year > 0);
+  const row = label => rows.find(r => r[0] === label);
+  // « -39 979 -113 » : deux montants, sous « Variation (€) » et « (%) ».
+  const result = row("Résultat");
+  assert.deepEqual(result.filter(v => v !== ""), ["Résultat", 2000, 41979, -39979, -113]);
+  assert.equal(result.indexOf(-39979), head.indexOf("Variation (€)"));
+  assert.equal(result.indexOf(-113), head.indexOf("(%)"));
+  // Une année reste écrite 2025, sans séparateur des milliers.
+  const exercice = rows.find(r => r[0] === "Exercice");
+  assert.equal(sheet[XLSX.utils.encode_cell({ r: rows.indexOf(exercice), c: exercice.indexOf(2025) })].z, "0");
+  assert.deepEqual(row("Terrains").filter(v => v !== ""), ["Terrains", "KG", 0, 0, "KH", 0]);
+  assert.deepEqual(row("Matériel de transport").filter(v => v !== ""), ["Matériel de transport", "KY", 0, 4724, "KZ", 923]);
+  const inst = row("Installations gales., agencts. et aménag.");
+  assert.deepEqual(inst?.filter(v => v !== ""), ["Installations gales., agencts. et aménag.", "S5", 12, "S6", 0], JSON.stringify(rows));
+  // « Brut », centré au-dessus de la paire code + montant, est rangé au-dessus du montant.
+  const brut = rows.find(r => r.includes("Brut"));
+  assert.equal(brut.indexOf("Brut"), row("Terrains").indexOf(0));
+});
+
 test("Word : un document est produit", async () => {
   const blob = await core.toDocx(docx, core.extractRows(facture()));
   assert.ok(blob.size > 1000);
