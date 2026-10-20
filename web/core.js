@@ -1155,8 +1155,8 @@ function textLines(page) {
 // fréquent avec une police à chasse fixe), ou un montant suivi du code de la case voisine d'une
 // liasse fiscale (« 0 KH ») : deux morceaux, chacun à sa place. De même pour un code posé au bout
 // d'un libellé, un peu plus loin que l'espace entre deux mots (« dont composants L9 »).
-const AMOUNT = "[-(]?\\d{1,3}(?:[ \\u00a0\\u202f]\\d{3})*(?:[.,]\\d+)?\\)?";
-const CODE = "(?=[A-Z0-9Ø]{2}\\s*$)[0-9]?[A-ZØ][A-Z0-9Ø]?";
+const MONEY = "[-(]?\\d{1,3}(?:[ \\u00a0\\u202f]\\d{3})*(?:[.,]\\d+)?\\)?";
+const BOX = "(?=[A-Z0-9Ø]{2}\\s*$)[0-9]?[A-ZØ][A-Z0-9Ø]?";
 function splitAt(chunk, at) {
   const left = chunk.chars.filter(c => c.at < at), right = chunk.chars.filter(c => c.at >= at);
   const x = right[0].x0, end = left[left.length - 1].x1;
@@ -1166,8 +1166,8 @@ function splitAt(chunk, at) {
 }
 function splitAmounts(chunk) {
   if (!chunk.chars) return [chunk];
-  const amount = chunk.text.match(new RegExp(`^\\s*${AMOUNT} +(?=-${AMOUNT}\\s*$|${CODE})`));
-  const m = amount || chunk.text.match(new RegExp(`^.*\\p{L}.*? +(?=${CODE})`, "u"));
+  const amount = chunk.text.match(new RegExp(`^\\s*${MONEY} +(?=-${MONEY}\\s*$|${BOX})`));
+  const m = amount || chunk.text.match(new RegExp(`^.*\\p{L}.*? +(?=${BOX})`, "u"));
   if (!m) return [chunk];
   const at = m[0].length, i = chunk.chars.findIndex(c => c.at >= at);
   if (i < 1 || (!amount && chunk.chars[i].x0 - chunk.chars[i - 1].x1 < chunk.size * 0.45)) return [chunk];
