@@ -1151,22 +1151,51 @@ function textLines(page) {
 // Morceaux de texte de la page : une ligne horizontale est coupée là où l'écart entre deux
 // caractères dépasse ~0,6 fois la taille du texte (case de tableau voisine, mot isolé…).
 // Une ligne inclinée ou verticale reste d'un seul tenant.
+// Deux montants de colonnes voisines écrits à une seule espace l'un de l'autre (« -39 979 -113 »,
+// fréquent avec une police à chasse fixe), ou un montant suivi du code de la case voisine d'une
+// liasse fiscale (« 0 KH ») : deux morceaux, chacun à sa place. De même pour un code posé au bout
+// d'un libellé, un peu plus loin que l'espace entre deux mots (« dont composants L9 »).
+const AMOUNT = "[-(]?\\d{1,3}(?:[ \\u00a0\\u202f]\\d{3})*(?:[.,]\\d+)?\\)?";
+const CODE = "(?=[A-Z0-9Ø]{2}\\s*$)[0-9]?[A-ZØ][A-Z0-9Ø]?";
+function splitAt(chunk, at) {
+  const left = chunk.chars.filter(c => c.at < at), right = chunk.chars.filter(c => c.at >= at);
+  const x = right[0].x0, end = left[left.length - 1].x1;
+  return [{ ...chunk, text: chunk.text.slice(0, at).trimEnd(), bbox: { ...chunk.bbox, w: end - chunk.x }, chars: left },
+    { ...chunk, x, text: chunk.text.slice(at), bbox: { ...chunk.bbox, x, w: chunk.x + chunk.bbox.w - x },
+      chars: right.map(c => ({ ...c, at: c.at - at })), cut: true }];
+}
+function splitAmounts(chunk) {
+  if (!chunk.chars) return [chunk];
+  const amount = chunk.text.match(new RegExp(`^\\s*${AMOUNT} +(?=-${AMOUNT}\\s*$|${CODE})`));
+  const m = amount || chunk.text.match(new RegExp(`^.*\\p{L}.*? +(?=${CODE})`, "u"));
+  if (!m) return [chunk];
+  const at = m[0].length, i = chunk.chars.findIndex(c => c.at >= at);
+  if (i < 1 || (!amount && chunk.chars[i].x0 - chunk.chars[i - 1].x1 < chunk.size * 0.45)) return [chunk];
+  return splitAt(chunk, at);
+}
+
 function textChunks(page) {
   const st = page.toStructuredText("preserve-whitespace");
   const chunks = [];
-  let cur = null, last = null, flat = true;
+  let cur = null, last = null, flat = true, spaces = [];
   const close = () => {
-    if (cur && cur.text.trim()) chunks.push(cur);
+    if (cur && cur.text.trim()) chunks.push(...splitAmounts(cur));
     cur = null; last = null;
   };
   st.walk({
     beginLine(bbox, wmode, dir) { close(); flat = Math.abs(dir[1]) < 0.5; },
     onChar(c, origin, font, size, quad) {
+      // Texte minuscule et invisible (repères de mise en page d'un logiciel comptable) : ignoré.
+      if (size < 1.2) return;
       const x0 = Math.min(quad[0], quad[4]), x1 = Math.max(quad[2], quad[6]);
       const y0 = Math.min(quad[1], quad[3]), y1 = Math.max(quad[5], quad[7]);
-      if (!c.trim()) { if (cur) cur.text += c; return; }
-      if (flat && cur && last !== null && x0 - last > Math.max(cur.size, size) * 0.6) close();
-      if (!cur) cur = { x: x0, y: origin[1], text: "", size, bold: font.isBold(), bbox: { x: x0, y: y0, w: 0, h: 0 }, top: y0, bottom: y1 };
+      if (!c.trim()) { if (cur) { cur.text += c; spaces.push(x1 - x0); } return; }
+      // (Une seule espace, aussi large soit-elle — police à chasse fixe —, sépare deux mots, pas deux cases.)
+      const gap = flat && cur && last !== null ? x0 - last : 0;
+      if (gap > Math.max(cur?.size ?? 0, size) * 0.6 && !(spaces.length === 1 && gap < spaces[0] * 1.2)) close();
+      spaces = [];
+      if (!cur) cur = { x: x0, y: origin[1], text: "", size, bold: font.isBold(), bbox: { x: x0, y: y0, w: 0, h: 0 }, top: y0, bottom: y1, chars: [] };
+      cur.chars.push({ at: cur.text.length, x0, x1 });
       cur.text += c;
       cur.size = Math.max(cur.size, size);
       cur.top = Math.min(cur.top, y0); cur.bottom = Math.max(cur.bottom, y1);
@@ -1199,7 +1228,7 @@ export function extractRows(bytes) {
 // (restes de traits, de trames ou de textes verticaux de la marge lus par l'OCR).
 const isDebris = t => {
   const letters = (t.match(/\p{L}/gu) || []).length;
-  return !/\p{N}/u.test(t) && !LINKS.has(t) && (letters < 2 || (letters === 2 && t.length <= 3 && !/^[A-Z]{2}$/.test(t.replace(/\W/g, ""))));
+  return !/\p{N}/u.test(t) && !LINKS.has(t) && !/^\(?[€%$£]\)?$/.test(t) && !/^\([A-Z]\)$/.test(t) && (letters < 2 || (letters === 2 && t.length <= 3 && !/^[A-ZØ]{2}$/.test(t.replace(/[^\p{L}\d]/gu, ""))));
 };
 const isAmount = t => typeof toNumber(t) === "number";
 // « 250 » suivi de « 190 » : un même montant écrit avec une espace entre les milliers.
@@ -1229,27 +1258,65 @@ export function fixOcrLabel(t) {
 }
 
 function layoutRows(lines) {
-  const items = lines.map(l => ({ x: l.x, end: l.bbox.x + l.bbox.w, y: l.y, text: l.text.trim(), size: l.size, bold: l.bold }))
+  const items = lines.map(l => ({ x: l.x, end: l.bbox.x + l.bbox.w, y: l.y, text: l.text.trim(), size: l.size, bold: l.bold, cut: l.cut }))
     .filter(c => !isDebris(c.text));
   items.sort((a, b) => a.y - b.y || a.x - b.x);
+  // Lignes : d'abord les textes posés sur la même ligne de base, puis les lignes à peine décalées
+  // se rejoignent, les plus proches d'abord (« corporelles », fin d'un libellé sur deux lignes, ne
+  // prend pas les montants de la ligne d'en dessous, posés sur la même base que leur libellé).
   let rows = [];
   for (const cell of items) {
-    const row = rows.find(r => Math.abs(r.y - cell.y) < Math.max(r.size, cell.size) * 0.5);
+    const row = rows.filter(r => Math.abs(r.y - cell.y) < Math.max(r.size, cell.size) * 0.15)
+      .sort((a, b) => Math.abs(a.y - cell.y) - Math.abs(b.y - cell.y))[0];
     if (row) row.cells.push(cell); else rows.push({ y: cell.y, size: cell.size, cells: [cell] });
   }
   rows.sort((a, b) => a.y - b.y);
+  for (;;) {
+    const gaps = rows.slice(1).map((r, i) => ({ i, d: r.y - rows[i].y }))
+      .filter(({ i, d }) => d < Math.min(rows[i].size, rows[i + 1].size) * 0.5).sort((a, b) => a.d - b.d);
+    if (!gaps.length) break;
+    const [a, b] = rows.splice(gaps[0].i, 2);
+    rows.splice(gaps[0].i, 0, { ...a, cells: [...a.cells, ...b.cells] });
+  }
   for (const r of rows) {
     r.cells.sort((a, b) => a.x - b.x);
     // Morceaux trop proches, ou suite d'un montant : même cellule.
     r.cells = r.cells.reduce((acc, c) => {
       const prev = acc[acc.length - 1];
       const gap = prev ? c.x - prev.end : Infinity, size = prev ? Math.max(prev.size, c.size) : 0;
-      if (prev && (gap < size * 0.6 || (gap < size * 1.2 && continuesAmount(prev.text, c.text)))) {
+      if (prev && !c.cut && (gap < size * 0.6 || (gap < size * 1.2 && continuesAmount(prev.text, c.text)))) {
         // Un écart négatif est un texte posé au-dessus (titre de colonne sur deux lignes) : on garde l'espace.
         prev.text = prev.text + (gap > size * 0.1 || gap < -size * 0.3 ? " " : "") + c.text; prev.end = Math.max(prev.end, c.end);
       } else acc.push(c);
       return acc;
     }, []);
+  }
+  // Titres de colonnes sur plusieurs lignes (« Valeur brute à » / « l'ouverture de » / « l'exercice (A) »,
+  // « Variation » / « (€) ») : les morceaux posés juste au-dessus ou au-dessous de la ligne de titres,
+  // hors de la colonne des libellés, la rejoignent.
+  const textOnly = r => r.cells.every(c => !isAmount(c.text) || /^(19|20)\d\d$/.test(c.text));
+  const words = r => r.cells.every(c => /\p{L}.*\p{L}|^(19|20)\d\d$|[€%]/u.test(c.text));
+  const small = r => Math.min(...r.cells.map(c => c.size));
+  for (let i = 0; i < rows.length; i++) {
+    const main = rows[i];
+    if (main.cells.length < 3 || !textOnly(main) || !words(main)) continue;
+    const fits = (o, prev) => o && textOnly(o) && Math.abs(o.y - prev.y) < Math.min(small(o), small(prev)) * 2
+      && o.cells.length < main.cells.length && o.cells.every(c => c.x > main.cells[0].end);
+    const parts = [];
+    for (const step of [-1, 1]) for (let k = i + step, prev = main; Math.abs(k - i) <= 2 && fits(rows[k], prev); k += step) parts.push(prev = rows[k]);
+    if (!parts.length) continue;
+    // Chaque titre de la ligne principale garde sa colonne ; un morceau rejoint celle qu'il recouvre le plus.
+    const cols = main.cells.map(c => ({ ...c, y: main.y, parts: [{ ...c, y: main.y }] }));
+    const overlap = (a, b) => Math.min(a.end, b.end) - Math.max(a.x, b.x);
+    for (const c of parts.flatMap(r => r.cells.map(c => ({ ...c, y: r.y })))) {
+      const col = cols.filter(k => overlap(k, c) > 0).sort((a, b) => overlap(b, c) - overlap(a, c))[0];
+      if (col) { col.parts.push(c); col.x = Math.min(col.x, c.x); col.end = Math.max(col.end, c.end); }
+      else cols.push({ ...c, parts: [c] });
+    }
+    cols.sort((a, b) => a.x - b.x);
+    main.cells = cols.map(({ parts: p, ...k }) => ({ ...k, text: p.sort((a, b) => a.y - b.y).map(c => c.text).join(" ") }));
+    rows = rows.filter(r => !parts.includes(r));
+    i = rows.indexOf(main);
   }
   // Marque isolée en tête de ligne, loin du libellé qui suit (numéro de marge, puce lue par l'OCR…).
   for (const r of rows) {
@@ -1286,6 +1353,32 @@ function layoutRows(lines) {
   // Ligne de montants, éventuellement précédés d'une marque de quelques signes (« æ3 ») qu'on laisse tomber.
   const scrap = c => !isAmount(c.text) && c.text.length <= 3 && !/^[A-Z0-9]{2}$/.test(c.text);
   const amounts = r => r.cells.some(c => isAmount(c.text)) && r.cells.every(c => isAmount(c.text) || scrap(c));
+  // Libellé sur deux lignes de part et d'autre d'une ligne de codes et de montants (liasse fiscale :
+  // « Installations gales., agencts. et » / « S5 0 S6 0 … » / « aménag. ») : une seule ligne.
+  const code = t => /^(?=.*[A-ZØ])[A-Z0-9Ø]{2}$/.test(t);
+  const data = r => r.cells.some(c => isAmount(c.text)) && r.cells.every(c => isAmount(c.text) || code(c.text));
+  for (let i = 1; i < rows.length - 1; i++) {
+    const [a, r, b] = rows.slice(i - 1, i + 2);
+    const half = o => Math.abs(o.y - r.y) < r.size * 0.8 && o.cells.every(c => !isAmount(c.text) && c.end < r.cells[0].x);
+    if (!data(r) || !half(a) || !half(b)) continue;
+    // Libellé plus long encore : les lignes voisines au même pas et au même retrait en font partie.
+    const step = b.y - a.y, more = (o, n) => o && Math.abs(Math.abs(o.y - n.y) - step) < step * 0.15
+      && o.cells.length === 1 && n.cells.length === 1 && Math.abs(o.cells[0].x - n.cells[0].x) < 1 && !isAmount(o.cells[0].text)
+      && o.cells[0].end < r.cells[0].x;
+    let top = i - 1, bottom = i + 1;
+    while (more(rows[top - 1], rows[top])) top--;
+    while (more(rows[bottom + 1], rows[bottom])) bottom++;
+    const lines = [...rows.slice(top, i), ...rows.slice(i + 1, bottom + 1)];
+    const label = lines[0].cells.map(c => ({ ...c }));
+    for (const c of lines.slice(1).flatMap(o => o.cells)) {
+      const k = label.find(o => Math.abs(o.x - c.x) < c.size * 1.5);
+      if (k) { k.text += (/-$/.test(k.text) ? "" : " ") + c.text; k.end = Math.max(k.end, c.end); }
+      else label.push(c);
+    }
+    r.cells = [...label.sort((p, q) => p.x - q.x), ...r.cells];
+    rows = rows.filter(o => !lines.includes(o));
+    i = rows.indexOf(r);
+  }
   // Montants centrés entre les deux lignes d'un libellé : rattachés à la ligne de texte la plus proche.
   rows = rows.filter((r, i) => {
     if (!amounts(r)) return true;
@@ -1335,6 +1428,7 @@ function layoutRows(lines) {
   const cols = [...cluster("x", multi.flatMap(r => r.cells.map(anchor).filter(a => a.kind === "x").map(a => a.pos))),
                 ...cluster("end", multi.flatMap(r => r.cells.map(anchor).filter(a => a.kind === "end").map(a => a.pos)))];
   cols.sort((a, b) => a.pos - b.pos);
+  const geo = new WeakMap();
   const out = rows.map(r => {
     let next = 0;
     return {
@@ -1347,7 +1441,9 @@ function layoutRows(lines) {
         });
         if (col < next) col = next;
         next = col + 1;
-        return { col, text: c.text, size: c.size, bold: c.bold };
+        const cell = { col, text: c.text, size: c.size, bold: c.bold };
+        geo.set(cell, c);
+        return cell;
       }),
     };
   });
@@ -1376,6 +1472,36 @@ function layoutRows(lines) {
       return acc;
     }, []);
   }
+  // Titre de colonne centré au-dessus d'une paire code + montant (« Brut » au-dessus de « AF 4 724 ») :
+  // un code n'a pas de titre à lui, le titre va aux montants.
+  const filled = (c, col) => c.col === col && (code(c.text) || isAmount(c.text));
+  const middle = col => {
+    const cs = out.flatMap(r => r.cells.filter(c => filled(c, col)));
+    return { n: cs.length, nums: cs.filter(c => isAmount(c.text)).length, mid: cs.reduce((t, c) => t + (geo.get(c).x + geo.get(c).end) / 2, 0) / cs.length };
+  };
+  for (const r of out) {
+    if (r.cells.some(c => code(c.text) || isAmount(c.text))) continue;
+    for (const c of [...r.cells].reverse()) {
+      const own = middle(c.col), next = middle(c.col + 1), mid = (geo.get(c).x + geo.get(c).end) / 2;
+      if (next.n >= 3 && next.nums >= next.n * 0.8 && own.n >= 3 && own.nums <= own.n * 0.2
+          && !r.cells.some(o => o.col === c.col + 1) && mid > own.mid) c.col++;
+    }
+  }
+  // Titre aligné à droite au-dessus de montants que le regroupement a rangés dans la colonne voisine
+  // (« Montant Brut » d'un second tableau de la page) : le titre rejoint ses montants.
+  const head = r => r.cells.length >= 2 && !r.cells.some(c => code(c.text) || isAmount(c.text));
+  out.forEach((r, i) => {
+    if (!head(r)) return;
+    let j = i + 1;
+    while (j < out.length && j - i <= 60 && !head(out[j])) j++;
+    const block = out.slice(i + 1, j).flatMap(o => o.cells);
+    for (const c of [...r.cells].reverse()) {
+      const nums = col => block.filter(o => o.col === col && isAmount(o.text)).map(o => geo.get(o));
+      const below = nums(c.col + 1), g = geo.get(c);
+      if (!nums(c.col).length && below.length >= 2 && !r.cells.some(o => o.col === c.col + 1)
+          && g.x < Math.max(...below.map(o => o.end)) && Math.min(...below.map(o => o.x)) < g.end) c.col++;
+    }
+  });
   return out;
 }
 
@@ -1407,7 +1533,9 @@ export function toXlsx(XLSX, pages) {
     const data = rows.map(r => rowToArray(r).map(toNumber));
     const ws = XLSX.utils.aoa_to_sheet(data.length ? data : [[""]]);
     // Montants affichés avec séparateur des milliers (1 234 567 ou 1 234,50 selon la langue d'Excel).
-    for (const ref of Object.keys(ws)) if (ws[ref]?.t === "n") ws[ref].z = Number.isInteger(ws[ref].v) ? "#,##0" : "#,##0.00";
+    // Une année (« 2025 » en titre de colonne) reste écrite sans séparateur des milliers.
+    const years = new Set(rows.flatMap((r, y) => rowToArray(r).flatMap((t, x) => /^(19|20)\d\d$/.test(t) ? [XLSX.utils.encode_cell({ r: y, c: x })] : [])));
+    for (const ref of Object.keys(ws)) if (ws[ref]?.t === "n") ws[ref].z = years.has(ref) ? "0" : Number.isInteger(ws[ref].v) ? "#,##0" : "#,##0.00";
     const width = Math.max(1, ...data.map(r => r.length));
     ws["!cols"] = Array.from({ length: width }, (_, k) =>
       ({ wch: Math.min(60, Math.max(8, ...data.map(r => String(r[k] ?? "").length + 2))) }));

@@ -46,7 +46,7 @@ Les commandes sont rangées dans des onglets, comme dans Word : **Fichier**, **A
 | Protéger un PDF | **Fichier › Protéger** : mot de passe à l'ouverture (chiffrement AES 256 bits) et/ou interdire l'impression, la copie ou les modifications |
 | Signer avec un certificat (signature électronique) | **Signer › Signer avec un certificat** : choisissez votre certificat (.p12 / .pfx) et son mot de passe, puis cliquez où placer le cadre. Signature PAdES (SHA-256) lisible par Adobe Reader ; plusieurs signatures successives restent valables |
 | Savoir qui a signé un PDF | **Signer › Signatures du document** : signataire, date, motif, et si le contenu a été modifié depuis |
-| Convertir | **Convertir** : Word, Excel, Texte ou PDF |
+| Convertir | **Convertir** : Word, Excel, Texte ou PDF. Dans l'Excel, les comptes annuels et liasses fiscales gardent leurs colonnes : chaque code de case et chaque montant dans sa cellule, les titres sur plusieurs lignes réunis |
 | Créer un PDF à partir de photos ou de scans | Ouvrez (ou glissez) des images PNG ou JPEG : elles forment un nouveau PDF, une page par image. Ou **Convertir › PDF depuis images** |
 | Enregistrer une page en image | **Convertir › Page en PNG / Page en JPEG** (150 ppp) |
 | Réduire le poids d'un PDF | **Convertir › Compresser** : Écran (e-mail), Standard ou Haute qualité ; la taille avant / après s'affiche |
