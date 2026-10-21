@@ -1236,10 +1236,11 @@ export function extractRows(bytes, area) {
 }
 
 // Débris : ni chiffre, ni mot de plus de deux lettres, hors codes en capitales comme « AB »
-// (restes de traits, de trames ou de textes verticaux de la marge lus par l'OCR).
+// (restes de traits, de trames ou de textes verticaux de la marge lus par l'OCR). Un « X » seul est
+// une case cochée.
 const isDebris = t => {
   const letters = (t.match(/\p{L}/gu) || []).length;
-  return !/\p{N}/u.test(t) && !LINKS.has(t) && !/^\(?[€%$£]\)?$/.test(t) && !/^\([A-Z]\)$/.test(t) && (letters < 2 || (letters === 2 && t.length <= 3 && !/^[A-ZØ]{2}$/.test(t.replace(/[^\p{L}\d]/gu, ""))));
+  return !/\p{N}/u.test(t) && !LINKS.has(t) && t !== "X" && !/^\(?[€%$£]\)?$/.test(t) && !/^\([A-Z]\)$/.test(t) && (letters < 2 || (letters === 2 && t.length <= 3 && !/^[A-ZØ]{2}$/.test(t.replace(/[^\p{L}\d]/gu, ""))));
 };
 const isAmount = t => typeof toNumber(t) === "number";
 // « 250 » suivi de « 190 » : un même montant écrit avec une espace entre les milliers.
@@ -1365,12 +1366,13 @@ function layoutRows(lines) {
   const scrap = c => !isAmount(c.text) && c.text.length <= 3 && !/^[A-Z0-9]{2}$/.test(c.text);
   const amounts = r => r.cells.some(c => isAmount(c.text)) && r.cells.every(c => isAmount(c.text) || scrap(c));
   // Libellé sur deux lignes de part et d'autre d'une ligne de codes et de montants (liasse fiscale :
-  // « Installations gales., agencts. et » / « S5 0 S6 0 … » / « aménag. ») : une seule ligne.
+  // « Installations gales., agencts. et » / « S5 0 S6 0 … » / « aménag. ») : une seule ligne. La ligne
+  // du milieu peut porter d'autres libellés plus à droite (formulaire en deux colonnes).
   const code = t => /^(?=.*[A-ZØ])[A-Z0-9Ø]{2}$/.test(t);
-  const data = r => r.cells.some(c => isAmount(c.text)) && r.cells.every(c => isAmount(c.text) || code(c.text));
+  const data = r => r.cells.some(c => isAmount(c.text) || code(c.text));
   for (let i = 1; i < rows.length - 1; i++) {
     const [a, r, b] = rows.slice(i - 1, i + 2);
-    const half = o => Math.abs(o.y - r.y) < r.size * 0.8 && o.cells.every(c => !isAmount(c.text) && c.end < r.cells[0].x);
+    const half = o => Math.abs(o.y - r.y) < r.size * 0.8 && o.cells.every(c => !isAmount(c.text) && !code(c.text) && c.end < r.cells[0].x);
     if (!data(r) || !half(a) || !half(b)) continue;
     // Libellé plus long encore : les lignes voisines au même pas et au même retrait en font partie.
     const step = b.y - a.y, more = (o, n) => o && Math.abs(Math.abs(o.y - n.y) - step) < step * 0.15
@@ -1498,19 +1500,24 @@ function layoutRows(lines) {
           && !r.cells.some(o => o.col === c.col + 1) && mid > own.mid) c.col++;
     }
   }
-  // Titre aligné à droite au-dessus de montants que le regroupement a rangés dans la colonne voisine
-  // (« Montant Brut » d'un second tableau de la page) : le titre rejoint ses montants.
+  // Titre de colonne posé au-dessus de montants que le regroupement a rangés dans la colonne voisine
+  // (« Montant Brut » d'un second tableau de la page) : il les rejoint. Un titre de page, bien plus
+  // large que les montants, reste où il est.
   const head = r => r.cells.length >= 2 && !r.cells.some(c => code(c.text) || isAmount(c.text));
   out.forEach((r, i) => {
     if (!head(r)) return;
-    let j = i + 1;
-    while (j < out.length && j - i <= 60 && !head(out[j])) j++;
-    const block = out.slice(i + 1, j).flatMap(o => o.cells);
+    // (Les lignes de titres qui suivent, titre sur plusieurs lignes, ne sont pas encore les montants.)
+    let k = i + 1;
+    while (k < out.length && head(out[k])) k++;
+    let j = k;
+    while (j < out.length && j - k <= 60 && !head(out[j])) j++;
+    const block = out.slice(k, j).flatMap(o => o.cells);
     for (const c of [...r.cells].reverse()) {
       const nums = col => block.filter(o => o.col === col && isAmount(o.text)).map(o => geo.get(o));
       const below = nums(c.col + 1), g = geo.get(c);
       if (!nums(c.col).length && below.length >= 2 && !r.cells.some(o => o.col === c.col + 1)
-          && g.x < Math.max(...below.map(o => o.end)) && Math.min(...below.map(o => o.x)) < g.end) c.col++;
+          && g.x < Math.max(...below.map(o => o.end)) && Math.min(...below.map(o => o.x)) < g.end
+          && g.end - g.x <= Math.max(c.size * 15, 3 * Math.max(...below.map(o => o.end - o.x)))) c.col++;
     }
   });
   return out;
