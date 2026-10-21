@@ -215,6 +215,10 @@ async function liasse() {
   });
   put("Installations gales., agencts. et", 40, 663.5); put("aménag.", 40, 656.5);
   put("S5", 250, 660, 7.5); right("12", 300, 660); put("S6", 330, 660, 7.5); right("0", 400, 660);
+  // Case cochée, et libellé sur deux lignes dans un formulaire en deux colonnes.
+  put("Régime réel normal", 40, 630); put("X", 300, 630);
+  put("Report à nouveau de l'exercice", 40, 613.5); put("antérieur", 40, 606.5);
+  put("ØC", 235, 610, 7.5); right("-108 360", 300, 610); put("Affectations aux réserves", 330, 610);
   return d.save();
 }
 
@@ -243,6 +247,9 @@ test("Excel : comptes annuels et liasse fiscale en texte natif", async () => {
   assert.deepEqual(row("Matériel de transport").filter(v => v !== ""), ["Matériel de transport", "KY", 0, 4724, "KZ", 923]);
   const inst = row("Installations gales., agencts. et aménag.");
   assert.deepEqual(inst?.filter(v => v !== ""), ["Installations gales., agencts. et aménag.", "S5", 12, "S6", 0], JSON.stringify(rows));
+  assert.deepEqual(row("Régime réel normal").filter(v => v !== ""), ["Régime réel normal", "X"]);
+  assert.deepEqual(row("Report à nouveau de l'exercice antérieur")?.filter(v => v !== ""),
+    ["Report à nouveau de l'exercice antérieur", "ØC", -108360, "Affectations aux réserves"], JSON.stringify(rows));
   // « Brut », centré au-dessus de la paire code + montant, est rangé au-dessus du montant.
   const brut = rows.find(r => r.includes("Brut"));
   assert.equal(brut.indexOf("Brut"), row("Terrains").indexOf(0));
