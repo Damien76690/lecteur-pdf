@@ -2122,6 +2122,8 @@ export function roundTrip(src, back) {
 export function cleanTranslation(src, out) {
   let t = String(out ?? "").replace(/(\p{L})\1{2,}/gu, "$1").replace(/(?<!\.)\.\.(?!\.)/g, ".").replace(/\s+/g, " ").trim();
   if (!t || t.length > src.length * 3 + 40) return src;
+  // Même mot aux accents près (« THEMIS » -> « Thémis ») : un nom propre, gardé tel quel.
+  if (norm(t) === norm(src)) return src;
   return t;
 }
 

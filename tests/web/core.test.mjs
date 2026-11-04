@@ -807,4 +807,6 @@ test("défauts des modèles de traduction corrigés", () => {
   assert.equal(core.cleanTranslation("Sales", "Ventes ".repeat(30)), "Sales");
   assert.equal(core.cleanTranslation("Etc", "Et ainsi de suite..."), "Et ainsi de suite...");
   assert.equal(core.cleanTranslation("Sales", ""), "Sales");
+  assert.equal(core.cleanTranslation("Themis", "Thémis"), "Themis");
+  assert.equal(core.cleanTranslation("Etat", "État"), "Etat");
 });
