@@ -25,18 +25,41 @@ let mode = "read";
 let zoom = 1;                 // 1 = 100 % ; ou "width" / "page" (ajusté à la fenêtre)
 let current = 0;              // page affichée (la plus visible)
 
-function say(text, err) { const m = $("#msg"); m.textContent = text; m.className = err ? "err" : ""; }
+// Barre d'état. say(texte, kind) : kind ∈ "" | "ok" | "err" | "busy" | true (= err) ; ratio 0..1 affiche une barre de progression.
+// Pendant une opération (body.busy), un message sans type garde le sablier.
+function say(text, kind = "", ratio) {
+  const m = $("#msg"), t = $("#msg-text"), bar = $("#msg-bar");
+  if (kind === true) kind = "err";
+  if (!kind && document.body.classList.contains("busy")) kind = "busy";
+  t.textContent = text;
+  m.className = kind;
+  m.setAttribute("role", kind === "err" ? "alert" : "status");
+  [...m.querySelectorAll("button, code")].forEach(b => b.remove());
+  bar.hidden = typeof ratio !== "number"; if (!bar.hidden) bar.value = ratio;
+  if (mode !== "read" && kind !== "busy") m.appendChild(Object.assign(document.createElement("button"), { textContent: "Terminer (Échap)", onclick: () => setMode("read") }));
+}
 function setButtons(disabled) {
   $$(".ribbon button, .ribbon input, .ribbon select").forEach(b => b.disabled = disabled || (!doc && !b.classList.contains("always")));
   $$("[data-sample], label.btn input").forEach(b => b.disabled = disabled);
   $("#undo").disabled = disabled || !doc || !doc.history.length;
   $("#redo").disabled = disabled || !doc || !doc.future.length;
+  if (doc && !disabled) trackCurrent();
 }
-async function busy(message, fn) {
-  say(message); document.body.classList.add("busy"); setButtons(true);
+async function busy(message, fn, what = "L'opération") {
+  say(message, "busy"); document.body.classList.add("busy"); setButtons(true);
   try { return await fn(); }
-  catch (e) { console.error(e); say("Erreur : " + (e.message || e), true); }
-  finally { document.body.classList.remove("busy"); setButtons(false); }
+  catch (e) {
+    console.error(e);
+    const msg = e.message || String(e);
+    const technical = /[A-Za-z]{4,}\s(is|not|failed|cannot|of|to|at)\s/.test(msg) || /^[A-Z][a-z]+Error/.test(msg);
+    document.body.classList.remove("busy");
+    say(technical ? `${what} a échoué. Réessayez ; si cela persiste, fermez puis rouvrez le document.` : "Erreur : " + msg, "err");
+    if (technical) { const d = document.createElement("button"); d.textContent = "Détails"; d.onclick = () => { d.replaceWith(Object.assign(document.createElement("code"), { textContent: msg })); }; $("#msg").appendChild(d); }
+  }
+  finally {
+    document.body.classList.remove("busy"); setButtons(false);
+    $("#msg").classList.remove("busy"); $("#msg-bar").hidden = true;   // le dernier message de l'opération reste, sans sablier
+  }
 }
 
 const scripts = {};
@@ -64,6 +87,7 @@ function setBytes(bytes) {
   render();
   refreshList();
   refreshSide();
+  scanTitles();
 }
 
 function setTitle(text) {
@@ -95,8 +119,12 @@ function showInfo() {
   if (doc.fields) parts.push(`Ce document contient ${plural(doc.fields, "champ")} de formulaire : cliquez dedans pour les remplir.`);
   if (doc.protection) parts.push("🔒 Le PDF enregistré sera protégé par " + (doc.protection.password ? "mot de passe." : "des restrictions (impression, copie ou modification).") +
     " Fichier › Protéger pour changer.");
+  const scan = core.needsOcr(doc.pages);
+  if (scan) parts.push("Ce PDF est un scan : son texte n'est pas encore sélectionnable, ni modifiable, ni convertible.");
   info.textContent = parts.join(" ");
   if (doc.signed) info.appendChild(Object.assign(document.createElement("button"), { textContent: "Détails", onclick: showCertSignatures }));
+  if (scan) info.appendChild(Object.assign(document.createElement("button"), { textContent: "Reconnaître le texte",
+    title: "Lance la reconnaissance du texte (OCR) : nécessaire avant de corriger, rechercher ou convertir un scan", onclick: () => $("#ocr").click() }));
   info.className = level;
   info.hidden = !parts.length;
 }
@@ -150,7 +178,16 @@ async function openBytes(bytes, name) {
   showRecents();
   if (doc?.signed && !doc.sigSummary) checkSignatures(doc);
   if (doc) say(`${doc.name} : ${plural(doc.pages.length, "page")}.` + (core.needsOcr(doc.pages)
-    ? " Ce PDF semble être une image (scan) : cliquez sur « Reconnaître le texte (OCR) » pour pouvoir le modifier ou le convertir." : ""));
+    ? " Ce PDF semble être une image (scan) : cliquez sur Modifier › Reconnaître le texte pour pouvoir le modifier ou le convertir." : ""));
+}
+
+// Infobulles Word / Excel : préviennent qu'un scan sera d'abord lu (OCR).
+function scanTitles() {
+  const scan = !!doc && core.needsOcr(doc.pages);
+  for (const b of $$("[data-dl=docx], [data-dl=xlsx]")) {
+    b.dataset.title ??= b.title;
+    b.title = b.dataset.title + (scan ? " (le texte du scan sera d'abord reconnu)" : "");
+  }
 }
 
 // ------------------------------------------------------------ onglets (plusieurs documents)
@@ -168,6 +205,7 @@ function showDoc() {
   $("#find").value = ""; $("#find-count").textContent = ""; found = null;
   showInfo();
   drawTabs();
+  if ($('[data-tab="fichier"]').classList.contains("on")) $('[data-tab="accueil"]').click();
 }
 
 function activate(d) {
@@ -192,7 +230,7 @@ function closeDoc(d = doc) {
   observer.disconnect();
   $$("#pages .page img").forEach(img => img.src && URL.revokeObjectURL(img.src));
   $("#pages").innerHTML = ""; $("#list").hidden = true;
-  $("#drop").hidden = false; $("#docname").textContent = ""; $("#count").textContent = "/ 0";
+  $("#drop").hidden = false; $("#docname").textContent = ""; $("#count").textContent = ""; $("#goto").value = "";
   $("#info").hidden = true; closeSide(); found = null; $("#find").value = ""; $("#find-count").textContent = "";
   setTitle("Mim PDF"); drawTabs(); showRecents();
   setButtons(false); say("Ouvrez un PDF pour commencer.");
@@ -202,13 +240,17 @@ function drawTabs() {
   const bar = $("#doctabs");
   bar.hidden = docs.length < 2;
   bar.innerHTML = "";
+  bar.setAttribute("role", "tablist"); bar.title = "Ctrl+Tab : document suivant";
   for (const d of docs) {
     const tab = document.createElement("div");
     tab.className = "doctab" + (d === doc ? " on" : "");
     tab.title = d.name + ".pdf";
-    tab.innerHTML = `<span></span><button title="Fermer ce document">✖</button>`;
-    tab.querySelector("span").textContent = (modified(d) ? "• " : "") + d.name;
+    tab.setAttribute("role", "tab"); tab.setAttribute("aria-selected", d === doc);
+    tab.innerHTML = `<span></span><button title="Fermer ce document" aria-label="Fermer ${d.name}.pdf">✖</button>`;
+    const s = tab.querySelector("span"); s.textContent = d.name;
+    if (modified(d)) { s.prepend(Object.assign(document.createElement("i"), { className: "dot" })); s.title = "Modifications non enregistrées"; }
     tab.onclick = () => activate(d);
+    tab.onauxclick = e => { if (e.button === 1) { e.preventDefault(); closeDoc(d); } };
     tab.querySelector("button").onclick = e => { e.stopPropagation(); closeDoc(d); };
     bar.appendChild(tab);
   }
@@ -258,7 +300,7 @@ function commit(before, after, done) {
   setBytes(after);
   const broke = doc.signed && core.keepsOriginal(doc.original, before) && !core.keepsOriginal(doc.original, after);
   say((typeof done === "function" ? done() : done) +
-      (broke ? " Attention : cette modification rend la signature électronique invalide dans la copie (Ctrl+Z pour annuler)." : ""));
+      (broke ? " Attention : cette modification rend la signature électronique invalide dans la copie (Ctrl+Z pour annuler)." : ""), broke ? "" : "ok");
   showInfo(); drawTabs();
 }
 
@@ -402,6 +444,9 @@ function trackCurrent() {
   });
   if (best !== current) { current = best; markSide(); }
   if (document.activeElement !== $("#goto")) $("#goto").value = current + 1;
+  const off = !doc || document.body.classList.contains("busy");
+  $("#prev").disabled = off || current === 0;
+  $("#next").disabled = off || current === doc.pages.length - 1;
 }
 
 function render() {
@@ -415,7 +460,7 @@ function render() {
     div.style.width = Math.round(p.w * scaleFor(p)) + "px";
     div.style.aspectRatio = `${p.w} / ${p.h}`;
     div.innerHTML = `<img draggable="false" alt="Page ${i + 1}">
-      <div class="bar"><button title="Pivoter">⟳</button><button title="Supprimer la page">🗑</button></div>
+      <div class="bar"><button title="Pivoter la page" aria-label="Pivoter la page ${i + 1}">⟳</button><button title="Supprimer la page" aria-label="Supprimer la page ${i + 1}">🗑</button></div>
       <div class="num">${i + 1} / ${doc.pages.length}</div>`;
     const [rot, del] = div.querySelectorAll(".bar button");
     rot.onclick = () => rotate(i, 90);
@@ -456,7 +501,8 @@ async function find(dir = 1) {
     found.at = (first < 0 ? 0 : first) - (dir > 0 ? 1 : 0);
   }
   const n = found.hits.length;
-  if (!n) { $("#find-count").textContent = "0 résultat"; paintHits(); return say(`« ${query} » est introuvable dans ce document.`, true); }
+  $("#find").classList.toggle("nohit", !n);
+  if (!n) { $("#find-count").textContent = "aucun"; paintHits(); return say(`« ${query} » est introuvable dans ce document.`, true); }
   found.at = ((found.at + dir) % n + n) % n;
   $("#find-count").textContent = `${found.at + 1} / ${n}`;
   paintHits();
@@ -499,7 +545,11 @@ function refreshSide() {
   if (!doc || $("#side").hidden) return;
   const out = $("#outline");
   out.innerHTML = "";
-  if (!doc.outline.length) out.innerHTML = '<div class="empty">Ce document n\'a pas de signets. Utilisez l\'onglet « Pages ».</div>';
+  $('[data-side="outline"]').hidden = !doc.outline.length;
+  if (!doc.outline.length) {
+    out.innerHTML = '<div class="empty">Ce document n\'a pas de signets.</div>';
+    if (sideTab === "outline") { sideTab = "thumbs"; return openSide("thumbs"); }   // le panneau est visible : openSide ne fait que marquer l'onglet
+  }
   doc.outline.forEach((o, k) => {
     const b = document.createElement("button");
     b.textContent = o.title; b.style.paddingLeft = 8 + 14 * o.level + "px"; b.dataset.k = k;
@@ -514,6 +564,7 @@ function refreshSide() {
   doc.pages.forEach((p, i) => {
     const b = document.createElement("button");
     b.dataset.index = i;
+    b.setAttribute("aria-label", "Page " + (i + 1));
     b.innerHTML = `<img alt="" style="aspect-ratio:${p.w} / ${p.h}"><span>${i + 1}</span>`;
     b.onclick = () => goTo(i);
     dragThumbs(b, i);
@@ -540,11 +591,13 @@ function openSide(tab = sideTab) {
   $("#thumbs").hidden = tab !== "thumbs";
   const wasHidden = $("#side").hidden;
   $("#side").hidden = false;
+  $("#side-toggle").classList.add("on"); $("#side-toggle").setAttribute("aria-expanded", "true");
   if (wasHidden) { refreshSide(); if (doc && typeof zoom !== "number") layout(); }
   else markSide();
 }
 function closeSide() {
   $("#side").hidden = true;
+  $("#side-toggle").classList.remove("on"); $("#side-toggle").setAttribute("aria-expanded", "false");
   thumbObserver.disconnect();
   if (doc && typeof zoom !== "number") layout();
 }
@@ -558,7 +611,7 @@ async function printDoc() {
   const ok = await busy("Préparation de l'impression…", async () => {
     box.innerHTML = "";
     for (let i = 0; i < doc.pages.length; i++) {
-      say(`Préparation de l'impression : page ${i + 1} / ${doc.pages.length}…`);
+      say(`Préparation de l'impression : page ${i + 1} / ${doc.pages.length}…`, "busy", i / doc.pages.length);
       const img = new Image();
       img.src = URL.createObjectURL(new Blob([core.renderPage(doc.mu, i, 2.5)], { type: "image/png" }));
       box.appendChild(img);
@@ -567,7 +620,7 @@ async function printDoc() {
     return true;
   });
   if (!ok) return;
-  say("Impression lancée.");
+  say("Impression lancée.", "ok");
   window.print();
   setTimeout(() => { $$("#print img").forEach(img => URL.revokeObjectURL(img.src)); box.innerHTML = ""; }, 1000);
 }
@@ -575,7 +628,7 @@ async function printDoc() {
 const rotate = (i, angle) => edit("Rotation…", b => core.rotatePage(b, i, angle), `Page ${i + 1} pivotée.`);
 function removePage(i) {
   if (doc.pages.length === 1) return say("Impossible de supprimer la seule page du document.", true);
-  if (confirm(`Supprimer la page ${i + 1} ?`)) edit("Suppression…", b => core.deletePage(b, i), "Page supprimée.");
+  if (confirm(`Supprimer la page ${i + 1} ?`)) edit("Suppression…", b => core.deletePage(b, i), `Page ${i + 1} supprimée — Ctrl+Z pour annuler.`);
 }
 
 // ------------------------------------------------------------ protection
@@ -1010,7 +1063,7 @@ async function translator(id, label) {
     if (p.status !== "progress" || !p.total) return;
     files[p.file] = [p.loaded, p.total];
     const [got, all] = Object.values(files).reduce(([a, b], [x, y]) => [a + x, b + y], [0, 0]);
-    say(`Téléchargement du traducteur ${label} (une seule fois) : ${Math.floor(got / 1048576)} Mo sur ${Math.floor(all / 1048576)} Mo…`);
+    say(`Téléchargement du traducteur ${label} (une seule fois) : ${Math.floor(got / 1048576)} Mo sur ${Math.floor(all / 1048576)} Mo…`, "busy", got / all);
   };
   return translators[id] = await T.pipeline("translation", id, { device: "wasm", dtype: "q8", progress_callback: progress })
     .catch(e => { delete translators[id]; throw e; });
@@ -1113,7 +1166,7 @@ async function translateDoc() {
       let back = null;
       const reverse = async list => (back ??= await translationEngine(tgt, src))(list);
       const done = await core.translateSegments(pages, { translate, reverse }, {
-        progress: (n, all) => say(`Traduction en ${target} : ${Math.round(n / all * 100)} % (${n} passages sur ${all})…`),
+        progress: (n, all) => say(`Traduction en ${target} : ${Math.round(n / all * 100)} % (${n} passages sur ${all})…`, "busy", n / all),
       });
       say("Mise en page du document traduit…");
       return core.applyTranslation(bytes, done, { scanned: scans, draw: drawTranslation(!!core.LANGUAGES[tgt].rtl) });
@@ -1123,7 +1176,7 @@ async function translateDoc() {
   await openBytes(result, `${name} (${core.LANGUAGES[tgt].name})`);
   const min = Math.round((Date.now() - t0) / 60000);
   say(`Traduction terminée en ${min < 1 ? "moins d'une minute" : plural(min, "minute")}, sur ce PC. ` +
-      "Relisez les noms propres et les termes techniques ; enregistrez le PDF traduit avec « Enregistrer sous ».");
+      "Relisez les noms propres et les termes techniques ; enregistrez le PDF traduit avec « Enregistrer sous ».", "ok");
 }
 
 // Glisser-déposer des miniatures pour changer l'ordre des pages.
@@ -1401,6 +1454,7 @@ function refreshList() {
 }
 function toggleList(show = $("#list").hidden) {
   $("#list").hidden = !show;
+  $("#toggle-list").classList.toggle("on", show); $("#toggle-list").setAttribute("aria-expanded", String(show));
   refreshList();
   if (doc && typeof zoom !== "number") layout();
 }
@@ -1414,7 +1468,8 @@ async function ocr(_, only = doc.pages.map((p, i) => i)) {
   say("Préparation de la reconnaissance du texte…");
   const worker = await Tesseract.createWorker(["fra", "eng"], 1, {
     workerPath: vendorUrl("worker.min.js"), corePath: vendorUrl("core"), langPath: vendorUrl("lang"),
-    logger: m => m.status === "recognizing text" && !checking && say(`Reconnaissance du texte : page ${current + 1} / ${only.length} (${Math.round(m.progress * 100)} %)…`),
+    logger: m => m.status === "recognizing text" && !checking &&
+      say(`Reconnaissance du texte : page ${current + 1} / ${only.length} (${Math.round(m.progress * 100)} %)…`, "busy", (current + m.progress) / only.length),
   });
   const pages = [];
   try {
@@ -1434,13 +1489,13 @@ async function ocr(_, only = doc.pages.map((p, i) => i)) {
       await worker.setParameters({ tessedit_pageseg_mode: "7", tessedit_char_whitelist: "0123456789 ,.-()/%" });
       const reads = [];
       checking = true;
-      say(`Vérification des montants : page ${current + 1} / ${only.length}…`);
+      say(`Vérification des montants : page ${current + 1} / ${only.length}…`, "busy", (current + .8) / only.length);
       for (const z of zones) reads.push((await worker.recognize(image, { rectangle: z.rect })).data);
       const words = core.keepOcrWords(core.mergeNumberReads(data.words, zones, reads));
       // Puis chaque libellé peu sûr, relu seul sur sa ligne.
       const lines = core.textZones(words, size), texts = [];
       await worker.setParameters({ tessedit_pageseg_mode: "7", tessedit_char_whitelist: "", preserve_interword_spaces: "1" });
-      say(`Vérification des libellés : page ${current + 1} / ${only.length}…`);
+      say(`Vérification des libellés : page ${current + 1} / ${only.length}…`, "busy", (current + .9) / only.length);
       for (const z of lines) texts.push((await worker.recognize(image, { rectangle: z.rect })).data);
       pages.push({ index: only[current], zoom: OCR_ZOOM, words: core.mergeTextReads(words, lines, texts) });
     }
@@ -1503,13 +1558,13 @@ async function save(fmt) {
       done = await download(await core.toDocx(docx, rows()), `${doc.name}.docx`);
     }
     if (scans.length && done && !/annulé/.test(done)) done += " Le texte a été lu automatiquement sur le scan : vérifiez les chiffres importants.";
-    say(done);
+    if (done) say(done, /annulé/.test(done) ? "" : "ok");
   });
 }
 
 // ------------------------------------------------------------ boutons
 
-const HINTS = { read: "Mode lecture.", text: "Cliquez sur la page à l'endroit où écrire.",
+const HINTS = { read: "Mode lecture.", text: "Cliquez sur la page à l'endroit où ajouter le texte.",
                 erase: "Tracez un rectangle sur la zone à effacer (son contenu sera réellement supprimé).",
                 table: "Encadrez le tableau à exporter vers Excel : faites glisser de son coin en haut à gauche à son coin en bas à droite.",
                 highlight: "Faites glisser sur le texte à surligner.", underline: "Faites glisser sur le texte à souligner.",
@@ -1518,20 +1573,37 @@ const HINTS = { read: "Mode lecture.", text: "Cliquez sur la page à l'endroit o
                 rect: "Tracez le rectangle.", ellipse: "Tracez l'ellipse.", arrow: "Tracez la flèche, de son départ vers sa pointe.",
                 stamp: "Cliquez à l'endroit où poser le tampon.", date: "Cliquez à l'endroit où écrire la date du jour.",
                 sign: "Cliquez à l'endroit où poser votre signature.", certsign: "Cliquez à l'endroit où placer le cadre de la signature électronique.", initials: "Cliquez à l'endroit où poser votre paraphe." };
+const NAMES = { text: "Ajouter du texte", erase: "Effacer une zone", table: "Tableau vers Excel", highlight: "Surligner", underline: "Souligner",
+                strike: "Barrer", note: "Note", textbox: "Zone de texte", ink: "Crayon", rect: "Rectangle", ellipse: "Ellipse", arrow: "Flèche",
+                stamp: "Tampon", date: "Date du jour", sign: "Signature", certsign: "Signature électronique", initials: "Paraphe" };
 function setMode(m) {
   mode = m;
   $$("[data-mode]").forEach(x => x.classList.toggle("on", x.dataset.mode === m));
-  document.body.className = "mode-" + mode + (DRAG.includes(m) ? " drawing" : "");
-  say(HINTS[mode] + (m === "read" ? "" : " Échap pour revenir à la lecture."));
+  document.body.className = "mode-" + mode + (DRAG.includes(m) ? " drawing" : "") + (document.body.classList.contains("busy") ? " busy" : "");
+  say(m === "read" ? HINTS.read : `${NAMES[m]} : ${HINTS[m]}`);
 }
 $$("[data-mode]").forEach(b => b.onclick = () => setMode(b.dataset.mode));
-$$("[data-tab]").forEach(t => t.onclick = () => {
-  $$("[data-tab]").forEach(x => { x.classList.toggle("on", x === t); x.setAttribute("aria-selected", x === t); });
-  $$("[data-panel]").forEach(p => p.hidden = p.dataset.panel !== t.dataset.tab);
+// Onglets du ruban : sans document, on explique ce que l'onglet permettra ; ← → passent d'un onglet à l'autre.
+const ASTUCE_PAGES = "Astuce : ouvrez le Panneau (F4) et glissez les miniatures pour réordonner les pages.";
+const VERBES = { commenter: "le commenter", signer: "le signer", modifier: "corriger son texte", pages: "réorganiser ses pages",
+                 convertir: "le convertir en Word ou Excel", synthese: "le résumer ou le traduire" };
+$$("[data-tab]").forEach((t, i, tabs) => {
+  t.onclick = () => {
+    tabs.forEach(x => { x.classList.toggle("on", x === t); x.setAttribute("aria-selected", x === t); x.tabIndex = x === t ? 0 : -1; });
+    $$("[data-panel]").forEach(p => p.hidden = p.dataset.panel !== t.dataset.tab);
+    if (!doc && VERBES[t.dataset.tab]) say(`Ouvrez d'abord un PDF (Fichier › Ouvrir, ou glissez-le ici) pour ${VERBES[t.dataset.tab]}.`);
+    else if (doc && t.dataset.tab === "pages" && mode === "read") say(ASTUCE_PAGES);
+    else if (doc && $("#msg-text").textContent === ASTUCE_PAGES) say(`${doc.name} : ${plural(doc.pages.length, "page")}.`);
+  };
+  t.onkeydown = e => {
+    if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+    const n = tabs[(i + (e.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length];
+    n.click(); n.focus();
+  };
 });
 $("#replace").onclick = () => {
   const old = $("#old").value, neu = $("#new").value;
-  if (!old) return say("Indiquez le texte à remplacer.", true);
+  if (!old) return say("Tapez d'abord, dans « Texte à corriger… », le mot exact à remplacer.", "err");
   let count = 0;
   edit("Remplacement…", async b => {
     const r = await core.replaceText(b, old, neu);
@@ -1553,7 +1625,7 @@ function redo() {
 $("#undo").onclick = undo;
 $("#stamp").innerHTML = core.STAMPS.map(t => `<option>${t}</option>`).join("");
 $("#toggle-list").onclick = () => toggleList();
-$("#close-list").onclick = () => toggleList(false);
+$("#close-list").onclick = () => { toggleList(false); $("#toggle-list").focus(); };
 $("#edit-sign").onclick = () => editSignature("signature").then(s => s && setMode("sign"));
 $("#edit-initials").onclick = () => editSignature("paraphe").then(s => s && setMode("initials"));
 $("#initials-all").onclick = initialsEverywhere;
@@ -1564,7 +1636,11 @@ $("#zoom-in").onclick = () => zoomStep(1);
 $("#zoom-out").onclick = () => zoomStep(-1);
 $("#prev").onclick = () => goTo(current - 1);
 $("#next").onclick = () => goTo(current + 1);
-$("#goto").onchange = e => goTo(+e.target.value - 1);
+$("#goto").onchange = e => {
+  const n = doc?.pages.length ?? 0, v = +e.target.value;
+  if (v < 1 || v > n) { say(`Ce document a ${n} page${n > 1 ? "s" : ""}.`, "err"); e.target.value = current + 1; return; }
+  goTo(v - 1);
+};
 $("#rotate-left").onclick = () => rotate(current, 270);
 $("#rotate-right").onclick = () => rotate(current, 90);
 $("#delete-page").onclick = () => removePage(current);
@@ -1585,7 +1661,7 @@ $("#copilot").onclick = sendToCopilot;
 $("#resume-rapide").onclick = quickResume;
 $("#resume-ia").onclick = aiResume;
 $("#traduire").onclick = translateDoc;
-$("#resume-copy").onclick = async () => say(await copyText($("#resume-text").textContent) ? "Résumé copié." : "La copie a échoué.", false);
+$("#resume-copy").onclick = async () => (await copyText($("#resume-text").textContent)) ? say("Résumé copié.", "ok") : say("La copie a échoué.", "err");
 $("#resume-save").onclick = async () => say(await download(new Blob([$("#resume-text").textContent], { type: "text/plain;charset=utf-8" }), `${doc.name} - résumé.txt`, "text/plain"));
 $("#number-pages").onclick = numberPages;
 $("#watermark").onclick = addWatermark;
@@ -1622,9 +1698,13 @@ document.addEventListener("keydown", e => {
   const ctrl = e.ctrlKey || e.metaKey, k = e.key.toLowerCase();
   if (ctrl && k === "f") {
     e.preventDefault();
-    $('[data-tab="accueil"]').click(); $("#find").focus(); $("#find").select();
+    $('[data-tab="accueil"]').click(); $("#find").scrollIntoView({ inline: "center", block: "nearest" }); $("#find").focus(); $("#find").select();
     return;
   }
+  if (ctrl && (e.key === "=" || e.key === "+") && doc) { e.preventDefault(); zoomStep(1); return; }
+  if (ctrl && e.key === "-" && doc) { e.preventDefault(); zoomStep(-1); return; }
+  if (ctrl && e.key === "0" && doc) { e.preventDefault(); setZoom("width"); return; }
+  if (e.key === "F4" && doc) { e.preventDefault(); $("#side").hidden ? openSide() : closeSide(); return; }
   if (ctrl && k === "p") { e.preventDefault(); printDoc(); return; }
   if (ctrl && k === "w") { e.preventDefault(); closeDoc(); return; }
   if (ctrl && e.key === "Tab" && docs.length > 1) {
@@ -1640,14 +1720,25 @@ document.addEventListener("keydown", e => {
   else if (ctrl && k === "s" && doc) { e.preventDefault(); save("pdf"); }
   else if (ctrl && k === "o") { e.preventDefault(); window.pywebview?.api?.ouvrir ? window.pywebview.api.ouvrir() : $("#file").click(); }
   else if (e.key === "Escape") setMode("read");
+  else if (doc && e.key === "Home") { e.preventDefault(); goTo(0); }
+  else if (doc && e.key === "End") { e.preventDefault(); goTo(doc.pages.length - 1); }
+  else if (doc && e.key === "PageDown") { e.preventDefault(); goTo(current + 1); }
+  else if (doc && e.key === "PageUp") { e.preventDefault(); goTo(current - 1); }
 });
 $("#find").onkeydown = e => { if (e.key === "Enter") { e.preventDefault(); find(e.shiftKey ? -1 : 1); } };
-$("#find").oninput = () => { if (!$("#find").value.trim()) find(); };
+// Recherche au fil de la frappe (à partir de deux caractères), sans relancer à chaque touche.
+let findTimer = 0;
+$("#find").oninput = () => {
+  clearTimeout(findTimer);
+  const v = $("#find").value.trim();
+  if (!v) { $("#find").classList.remove("nohit"); return find(); }
+  if (v.length >= 2) findTimer = setTimeout(() => find(1), 350);
+};
 $("#find-next").onclick = () => find(1);
 $("#find-prev").onclick = () => find(-1);
 $$("[data-print]").forEach(b => b.onclick = printDoc);
 $("#side-toggle").onclick = () => $("#side").hidden ? openSide() : closeSide();
-$("#side-close").onclick = closeSide;
+$("#side-close").onclick = () => { closeSide(); $("#side-toggle").focus(); };
 $$("[data-side]").forEach(b => b.onclick = () => openSide(b.dataset.side));
 $("#ocr").onclick = () => edit("Reconnaissance du texte…", ocr,
   "Texte reconnu : le PDF est maintenant sélectionnable et convertible. Vérifiez les chiffres importants.");
@@ -1739,6 +1830,8 @@ $$("label.btn:has(input[type=file])").forEach(l => l.addEventListener("click", e
 
 document.body.className = "mode-read";
 setButtons(false);
+// Les boutons dont le libellé est un simple symbole (▲, ✖…) sont nommés par leur infobulle pour les lecteurs d'écran.
+$$("button[title]:not([aria-label])").forEach(b => { if (!/\p{L}{2,}/u.test(b.textContent)) b.setAttribute("aria-label", b.title); });
 try {
   const [mupdf] = await Promise.all([import(LIBS.mupdf), loadScript(LIBS.pdflib)]);
   core.init({ mupdf, PDFLib });
