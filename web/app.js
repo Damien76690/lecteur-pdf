@@ -1678,7 +1678,7 @@ function toggleFullscreen() {
   if (api?.plein_ecran) return api.plein_ecran();
   if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen?.();
 }
-// Ctrl + molette : zoom (comme dans Nitro, Word, les navigateurs…).
+// Ctrl + molette : zoom (comme dans Word, les navigateurs…).
 let wheeling = 0;
 addEventListener("wheel", e => {
   if (!e.ctrlKey || !doc) return;
