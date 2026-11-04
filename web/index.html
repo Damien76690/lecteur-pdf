@@ -130,6 +130,9 @@
   #thumbs button.dragging { opacity:.4; }
   dialog label.row { display:flex; justify-content:space-between; align-items:center; gap:10px; margin:8px 0; }
   dialog label.row input { width:80px; }
+  dialog div.row { display:flex; flex-wrap:wrap; gap:16px; margin:8px 0; }
+  dialog div.row label { display:flex; flex-direction:column; gap:4px; flex:1; min-width:180px; }
+  dialog div.row select { max-width:100%; }
   #thumbs button.cur { border-color:var(--accent); color:var(--accent); }
   #thumbs img { width:120px; background:#fff; box-shadow:0 1px 3px rgba(0,0,0,.25); display:block; }
   @media (max-width: 700px) { #side { position:fixed; left:8px; top:auto; bottom:8px; width:60vw; max-height:50vh; margin:0; z-index:20; } }
@@ -361,7 +364,7 @@
         <button class="big" id="resume-ia" title="Synthèse rédigée par une intelligence artificielle qui tourne sur ce PC"><span class="ic">✎</span>Résumé IA</button>
       </div><span class="gl">Sur ce PC, rien n'est envoyé</span></div>
       <div class="group"><div class="tools">
-        <button class="big" id="traduire" title="Traduire en français un document en anglais, allemand, espagnol ou chinois, en gardant sa mise en page"><span class="ic">文A</span>Traduire en français</button>
+        <button class="big" id="traduire" title="Traduire le document d'une langue vers une autre (80 langues, dont français, anglais, allemand, espagnol, chinois, arabe), en gardant sa mise en page"><span class="ic">文A</span>Traduire</button>
       </div><span class="gl">Traduction sur ce PC</span></div>
     </section>
   </div>
@@ -497,19 +500,19 @@
 </dialog>
 <dialog id="trad-dlg">
   <form method="dialog">
-    <h3>Traduire en français</h3>
+    <h3>Traduire ce document</h3>
     <p class="hint" id="trad-guess"></p>
-    <label>Langue du document :
-      <select id="trad-lang">
-        <option value="en">Anglais</option>
-        <option value="de">Allemand</option>
-        <option value="es">Espagnol</option>
-        <option value="zh">Chinois</option>
-      </select></label>
-    <p>Mim PDF crée une copie du document en français, avec la même mise en page, dans un nouvel onglet.
+    <div class="row">
+      <label>Langue du document :
+        <select id="trad-src"></select></label>
+      <label>Traduire en :
+        <select id="trad-lang"></select></label>
+    </div>
+    <p class="hint" id="trad-route"></p>
+    <p>Mim PDF crée une copie du document dans la langue choisie, avec la même mise en page, dans un nouvel onglet.
       L'original n'est pas modifié.</p>
-    <p class="hint">La traduction se fait sur cet ordinateur avec des modèles libres et gratuits (OPUS-MT, université d'Helsinki).
-      Au premier usage de chaque langue, le modèle (environ 100 Mo, 200 Mo pour le chinois) est téléchargé une seule fois depuis Hugging Face ;
+    <p class="hint">La traduction se fait sur cet ordinateur avec des modèles libres et gratuits (OPUS-MT, université d'Helsinki) :
+      80 langues, dans les deux sens. Au premier usage d'une paire de langues, son modèle (environ 100 Mo) est téléchargé une seule fois ;
       ensuite tout fonctionne sans Internet et le document n'est jamais envoyé. Comptez quelques minutes pour un long document.</p>
     <div class="actions"><button value="cancel">Annuler</button><button value="ok" class="primary">Traduire</button></div>
   </form>

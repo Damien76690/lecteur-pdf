@@ -1,4 +1,4 @@
-// Essai de la traduction en français avec les vrais modèles (lancé par la CI) :
+// Essai de la traduction avec les vrais modèles (lancé par la CI) :
 //   npm i --no-save @huggingface/transformers@4.3.1 && node scripts/essai-traduction.mjs
 // Les modèles sont rangés dans modeles-traduction/ (même format que dans l'application).
 import { pipeline, env } from "@huggingface/transformers";
@@ -9,6 +9,18 @@ import * as core from "../web/core.js";
 core.init({ mupdf, PDFLib });
 
 env.cacheDir = "modeles-traduction";
+const loaded = {};
+const load = async id => loaded[id] ??= await pipeline("translation", id, { dtype: "q8" });
+// Moteur src → tgt comme dans l'application : une ou deux étapes OPUS-MT, préfixe de langue cible si besoin.
+async function engine(src, tgt) {
+  const steps = [];
+  for (const r of core.translationRoute(src, tgt)) steps.push({ run: await load(r.model), prefix: r.prefix });
+  return async list => {
+    let out = list;
+    for (const s of steps) out = (await s.run(s.prefix ? out.map(t => `${s.prefix} ${t}`) : out, { max_new_tokens: 400 })).map(r => r.translation_text);
+    return out;
+  };
+}
 const SAMPLES = {
   en: ["BANK SITUATION", "Top 15 Customers", "Middle East/Asia partners strongly represented",
        "The budget assumes a stable exchange rate and no new tariffs in the United States."],
@@ -17,22 +29,43 @@ const SAMPLES = {
   zh: ["今年的销售额符合预算。", "客户", "银行贷款和现金流"],
 };
 let failed = false;
+const fail = msg => { failed = true; console.log(`  ÉCHEC : ${msg}`); };
 for (const [lang, texts] of Object.entries(SAMPLES)) {
-  const chain = [];
-  for (const id of core.TRANSLATION_MODELS[lang]) chain.push(await pipeline("translation", id, { dtype: "q8" }));
+  const translate = await engine(lang, "fr");
   const t0 = Date.now();
-  const pages = [texts.map(text => ({ text }))];
-  const done = await core.translateSegments(pages, async list => {
-    let out = list;
-    for (const run of chain) out = (await run(out, { max_new_tokens: 400 })).map(r => r.translation_text);
-    return out;
-  });
-  console.log(`\n${core.LANGUAGES[lang]} (${Date.now() - t0} ms)`);
+  const done = await core.translateSegments([texts.map(text => ({ text }))], translate);
+  console.log(`\n${core.LANGUAGES[lang].name} → français (${Date.now() - t0} ms)`);
   for (const s of done[0]) console.log(`  ${s.text}  ->  ${s.fr}`);
   const all = done[0].map(s => s.fr).join(". ");
-  const long = done[0][0].fr;
-  if (core.detectLanguage(long) !== "fr" && core.detectLanguage(all) !== "fr") { failed = true; console.log(`  ÉCHEC : pas du français`); }
+  if (core.detectLanguage(done[0][0].fr) !== "fr" && core.detectLanguage(all) !== "fr") fail("pas du français");
 }
+// Autres sens : paire directe (de→es), via l'anglais (ar→zh, ja→fr, fr→pt par ROMANCE), modèle multilingue (en→pl).
+const OTHERS = [
+  ["de", "es", "Die Umsätze des Jahres liegen im Rahmen des Budgets.", "es"],
+  ["ar", "zh", "ارتفعت المبيعات هذا العام بنسبة عشرة بالمئة.", "zh"],
+  ["ja", "fr", "今年の売上は予算に沿っています。", "fr"],
+  ["fr", "pt", "Les ventes de l'année sont conformes au budget.", "pt"],
+  ["en", "pl", "The sales of the year are in line with the budget.", "pl"],
+  ["fr", "en", "Les ventes de l'année sont conformes au budget.", "en"],
+];
+for (const [src, tgt, text, expect] of OTHERS) {
+  const translate = await engine(src, tgt);
+  const t0 = Date.now();
+  const [[s]] = await core.translateSegments([[{ text }]], translate);
+  console.log(`\n${core.LANGUAGES[src].name} → ${core.LANGUAGES[tgt].name} (${Date.now() - t0} ms)\n  ${text}  ->  ${s.fr}`);
+  if (s.fr === text) fail("texte non traduit");
+  const got = core.detectLanguage(s.fr);
+  if (got && got !== expect && !(expect === "pl" && !core.LANGUAGES[got].script)) fail(`langue obtenue : ${got}`);
+}
+// Contrôle par traduction inverse : les sigles et noms propres mal traduits sont gardés tels quels.
+const enfr = await engine("en", "fr"), fren = await engine("fr", "en");
+const [checked] = await core.translateSegments([["THEMIS", "OMV", "BASF US", "GENERAL KPIs", "Carry Forward", "Top 15 Customers"].map(text => ({ text }))],
+  { translate: enfr, reverse: fren });
+console.log("\nContrôle inverse :");
+for (const s of checked) console.log(`  ${s.text}  ->  ${s.fr}`);
+for (const s of checked) for (const w of core.protectedTokens(s.text)) if (!s.fr.includes(w)) fail(`${w} perdu dans « ${s.fr} »`);
+if (checked[0].fr !== "THEMIS") fail("THEMIS devrait être gardé");
+if (!/clients/i.test(checked[5].fr)) fail("Top 15 Customers devrait être traduit");
 // De bout en bout : un PDF anglais façon présentation (titre, tableau, puces), traduit en PDF français.
 const en = await (async () => {
   const doc = await PDFLib.PDFDocument.create();
@@ -48,18 +81,17 @@ const en = await (async () => {
     row.forEach((c, k) => page.drawText(c, { x: k ? 140 + k * 60 : 40, y: 405 - r * 12, size: 7, font })));
   return doc.save();
 })();
-const enfr = await pipeline("translation", core.TRANSLATION_MODELS.en[0], { dtype: "q8" });
 const segs = core.translationSegments(en);
 const t1 = Date.now();
-const done = await core.translateSegments(segs, async list => (await enfr(list, { max_new_tokens: 400 })).map(r => r.translation_text));
+const done = await core.translateSegments(segs, enfr);
 const fr = await core.applyTranslation(en, done);
 console.log(`\nPDF traduit (${segs.flat().length} passages, ${Date.now() - t1} ms) :`);
 console.log(core.toText(core.extractRows(fr)));
 // Vitesse sur 200 passages courts différents (une présentation de 30 pages en compte ~400).
 const many = Array.from({ length: 200 }, (_, k) => [{ text: `Sales forecast for customer group ${k} in the second quarter` }]);
 const t2 = Date.now();
-await core.translateSegments(many, async list => (await enfr(list, { max_new_tokens: 400 })).map(r => r.translation_text));
+await core.translateSegments(many, enfr);
 console.log(`\n200 passages traduits en ${Math.round((Date.now() - t2) / 1000)} s.`);
 
 if (failed) process.exit(1);
-console.log("\nTraduction vers le français : OK pour les 4 langues.");
+console.log("\nTraduction : OK (4 langues vers le français, 6 autres paires, contrôle inverse).");

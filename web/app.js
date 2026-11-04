@@ -995,10 +995,11 @@ async function aiResume() {
   } finally { summarizing = false; }
 }
 
-// Traduction en français, faite sur ce PC par des modèles libres OPUS-MT (Transformers.js).
-// Chaque modèle (~100 Mo) est téléchargé une seule fois ; le document n'est jamais envoyé.
-// Le résultat est un nouveau PDF, ouvert dans un onglet : même mise en page, texte en français.
+// Traduction faite sur ce PC par des modèles libres OPUS-MT (Transformers.js), d'une langue vers
+// une autre parmi 80. Chaque modèle (~100 Mo) est téléchargé une seule fois ; le document n'est
+// jamais envoyé. Le résultat est un nouveau PDF ouvert dans un onglet, même mise en page.
 const translators = {};
+const TRAD_TARGET = "mim-trad-cible";
 let translating = false;
 
 async function translator(id, label) {
@@ -1015,18 +1016,83 @@ async function translator(id, label) {
     .catch(e => { delete translators[id]; throw e; });
 }
 
+// Moteur de traduction src → tgt : une ou deux étapes (via l'anglais), chaque étape un modèle OPUS-MT.
+async function translationEngine(src, tgt) {
+  const label = `${core.LANGUAGES[src].name} → ${core.LANGUAGES[tgt].name}`;
+  const steps = [];
+  for (const r of core.translationRoute(src, tgt)) steps.push({ run: await translator(r.model, label), prefix: r.prefix });
+  return async list => {
+    let out = list;
+    for (const s of steps) {
+      const input = s.prefix ? out.map(t => `${s.prefix} ${t}`) : out;
+      out = (await s.run(input, { max_new_tokens: 400 })).map(r => r.translation_text);
+    }
+    return out;
+  };
+}
+
+// Dessine un texte que Helvetica ne sait pas écrire (cyrillique, chinois, arabe…) : image PNG
+// pour applyTranslation, rendue par le navigateur avec ses polices, en haute résolution.
+function drawTranslation(rtl) {
+  return async (text, { width, height, size, lines, bold, color, step }) => {
+    const scale = 4, canvas = document.createElement("canvas"), ctx = canvas.getContext("2d");
+    const fontOf = s => `${bold ? "bold " : ""}${s}px Helvetica, Arial, "Segoe UI", "Noto Sans", sans-serif`;
+    const widthOf = (t, s) => { ctx.font = fontOf(s); return ctx.measureText(t).width; };
+    const fit = core.fitText(widthOf, text, { width, height, size, lines });
+    const gap = lines > 1 ? step * fit.size / size : fit.size * 1.18;
+    const h = Math.max(height, gap * fit.lines.length);
+    canvas.width = Math.ceil(width * scale); canvas.height = Math.ceil(h * scale);
+    ctx.scale(scale, scale);
+    ctx.font = fontOf(fit.size); ctx.textBaseline = "alphabetic";
+    ctx.fillStyle = `rgb(${color.map(c => Math.round(Math.min(1, Math.max(0, c)) * 255)).join(",")})`;
+    ctx.direction = rtl ? "rtl" : "ltr"; ctx.textAlign = rtl ? "right" : "left";
+    fit.lines.forEach((line, k) => ctx.fillText(line, rtl ? width : 0, fit.size * 0.8 + k * gap));
+    const blob = await new Promise(done => canvas.toBlob(done, "image/png"));
+    return { png: new Uint8Array(await blob.arrayBuffer()), width, height: h };
+  };
+}
+
+// Listes de langues du dialogue : la cible en premier choix mémorisée, la source détectée.
+function fillLanguageLists() {
+  const src = $("#trad-src"), tgt = $("#trad-lang");
+  if (src.options.length) return;
+  const sorted = Object.entries(core.LANGUAGES).sort((a, b) => a[1].name.localeCompare(b[1].name, "fr"));
+  const option = ([code, l]) => { const o = document.createElement("option"); o.value = code; o.textContent = l.name.charAt(0).toUpperCase() + l.name.slice(1); return o; };
+  src.append(new Option("Détection automatique", "auto"), ...sorted.map(option));
+  tgt.append(...sorted.map(option));
+}
+
 async function translateDoc() {
   if (translating) return say("Une traduction est déjà en cours.");
-  const dlg = $("#trad-dlg"), pick = $("#trad-lang");
-  const sample = doc.pages.some(p => p.hasText) ? core.translationSegments(doc.bytes).flat().map(s => s.text).join("\n") : "";
+  fillLanguageLists();
+  const dlg = $("#trad-dlg"), srcPick = $("#trad-src"), tgtPick = $("#trad-lang");
+  let remembered = "fr";
+  try { remembered = localStorage.getItem(TRAD_TARGET) || "fr"; } catch {}
+  tgtPick.value = core.LANGUAGES[remembered] ? remembered : "fr";
+  const sample = doc.pages.some(p => p.hasText) ? core.translationSegments(doc.bytes, "").flat().map(s => s.text).join("\n") : "";
   const guess = core.detectLanguage(sample);
-  pick.value = core.LANGUAGES[guess] ? guess : "en";
-  $("#trad-guess").textContent = !sample ? "Document scanné : son texte sera d'abord reconnu (OCR)."
-    : guess === "fr" ? "Ce document semble déjà en français : seuls les passages dans une autre langue seront traduits."
-    : core.LANGUAGES[guess] ? `Langue détectée : ${core.LANGUAGES[guess]}.` : "Langue non reconnue : choisissez-la.";
+  srcPick.value = "auto";
+  const guessed = () => !sample ? "Document scanné : son texte sera d'abord reconnu (OCR), puis sa langue détectée."
+    : core.LANGUAGES[guess] ? `Langue détectée : ${core.LANGUAGES[guess].name}. Les passages déjà dans la langue cible sont gardés tels quels.`
+    : "Langue non reconnue : choisissez-la dans la liste.";
+  const refresh = () => {
+    const s = srcPick.value === "auto" ? guess : srcPick.value, t = tgtPick.value;
+    $("#trad-guess").textContent = guessed();
+    let info = "";
+    if (core.LANGUAGES[s] && s !== t) {
+      const route = core.translationRoute(s, t);
+      const size = core.routeSize(route, new Set(Object.keys(translators)));
+      info = (route.length === 2 ? `Pas de modèle direct ${core.LANGUAGES[s].name} → ${core.LANGUAGES[t].name} : la traduction passe par l'anglais. ` : "") +
+             (size ? `Téléchargement unique d'environ ${size} Mo.` : "Modèles déjà téléchargés.");
+    } else if (s === t) info = "La langue cible est la même que celle du document.";
+    $("#trad-route").textContent = info;
+  };
+  srcPick.onchange = tgtPick.onchange = refresh;
+  refresh();
   const ok = await new Promise(done => { dlg.onclose = () => done(dlg.returnValue === "ok"); dlg.returnValue = ""; dlg.showModal(); });
   if (!ok) return say("Traduction annulée.");
-  const lang = pick.value, source = doc, name = doc.name, t0 = Date.now();
+  const tgt = tgtPick.value, chosen = srcPick.value, source = doc, name = doc.name, t0 = Date.now();
+  try { localStorage.setItem(TRAD_TARGET, tgt); } catch {}
   translating = true;
   let result;
   try {
@@ -1037,24 +1103,24 @@ async function translateDoc() {
         say(`Ce PDF est scanné : lecture du texte de ${plural(scans.length, "page")}…`);
         bytes = await ocr(bytes, scans);
       }
-      const pages = core.translationSegments(bytes);
+      const pages = core.translationSegments(bytes, tgt);
       if (!pages.flat().length) throw new Error("aucun texte à traduire dans ce document");
-      const chain = [];
-      for (const id of core.TRANSLATION_MODELS[lang]) chain.push(await translator(id, core.LANGUAGES[lang]));
-      const translate = async list => {
-        let out = list;
-        for (const run of chain) out = (await run(out, { max_new_tokens: 400 })).map(r => r.translation_text);
-        return out;
-      };
-      const done = await core.translateSegments(pages, translate, {
-        progress: (n, all) => say(`Traduction en français : ${Math.round(n / all * 100)} % (${n} passages sur ${all})…`),
+      const src = chosen !== "auto" ? chosen : core.detectLanguage(pages.flat().map(s => s.text).join("\n"));
+      if (!core.LANGUAGES[src]) throw new Error("langue du document non reconnue : choisissez-la dans la liste");
+      if (src === tgt) throw new Error(`ce document est déjà en ${core.LANGUAGES[tgt].name}`);
+      const target = core.LANGUAGES[tgt].name;
+      const translate = await translationEngine(src, tgt);
+      let back = null;
+      const reverse = async list => (back ??= await translationEngine(tgt, src))(list);
+      const done = await core.translateSegments(pages, { translate, reverse }, {
+        progress: (n, all) => say(`Traduction en ${target} : ${Math.round(n / all * 100)} % (${n} passages sur ${all})…`),
       });
       say("Mise en page du document traduit…");
-      return core.applyTranslation(bytes, done, { scanned: scans });
+      return core.applyTranslation(bytes, done, { scanned: scans, draw: drawTranslation(!!core.LANGUAGES[tgt].rtl) });
     });
   } finally { translating = false; }
   if (!result) return;
-  await openBytes(result, `${name} (français)`);
+  await openBytes(result, `${name} (${core.LANGUAGES[tgt].name})`);
   const min = Math.round((Date.now() - t0) / 60000);
   say(`Traduction terminée en ${min < 1 ? "moins d'une minute" : plural(min, "minute")}, sur ce PC. ` +
       "Relisez les noms propres et les termes techniques ; enregistrez le PDF traduit avec « Enregistrer sous ».");
