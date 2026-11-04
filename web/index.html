@@ -22,37 +22,56 @@
   .tabs { display:flex; gap:2px; }
   .tabs button { border:none; border-radius:6px 6px 0 0; background:none; padding:7px 14px; border-bottom:3px solid transparent; }
   .tabs button.on { color:var(--accent); border-bottom-color:var(--accent); background:var(--bg); }
-  .tabs button:disabled { opacity:1; cursor:pointer; }
   #docname { margin-left:auto; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:40vw; }
   .ribbon { background:var(--bg); border-top:1px solid var(--border); overflow-x:auto; }
-  .ribbon section { display:flex; gap:0; padding:6px 8px 2px; min-height:86px; }
-  .group { display:flex; flex-direction:column; align-items:center; padding:0 10px; border-right:1px solid var(--border); }
+  .ribbon { background:linear-gradient(90deg, var(--bg) 30%, transparent) left, linear-gradient(270deg, var(--bg) 30%, transparent) right, var(--bg);
+            background-size:40px 100%, 40px 100%, auto; background-repeat:no-repeat; background-attachment:local, local, scroll; }
+  .ribbon section { display:flex; gap:0; padding:6px 8px 2px; height:96px; }
+  .group { display:flex; flex-direction:column; align-items:center; justify-content:space-between; padding:0 8px; border-right:1px solid var(--border); }
   .group:last-child { border-right:none; }
-  .tools { display:flex; gap:4px; align-items:center; flex:1; }
-  .gl { font-size:11px; color:var(--muted); padding:3px 0 2px; white-space:nowrap; }
-  .stack { display:flex; flex-direction:column; gap:4px; }
+  .tools { display:flex; gap:3px; align-items:center; }
+  .gl { font-size:12px; color:#4b5563; padding:3px 0 2px; white-space:nowrap; }
+  .stack { display:flex; flex-direction:column; gap:2px; }
+  .stack button, .stack input, .stack select { padding:3px 8px; }
   button, label.btn { font:inherit; padding:6px 10px; border:1px solid var(--border); border-radius:6px;
            background:#fff; color:var(--text); cursor:pointer; white-space:nowrap; }
-  button.big, label.btn.big { display:flex; flex-direction:column; align-items:center; gap:2px; min-width:64px;
-           padding:4px 8px; font-size:12px; border-color:transparent; background:transparent; }
-  .ic { font-size:20px; line-height:24px; font-weight:600; }
-  button:hover, label.btn:hover { border-color:var(--accent); }
-  button.on, button.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
-  button:disabled { opacity:.45; cursor:default; }
+  button.big, label.btn.big { display:flex; flex-direction:column; align-items:center; gap:3px; min-width:68px;
+           padding:4px 8px; font-size:13px; border-color:transparent; background:transparent; }
+  .ic { font-size:24px; line-height:28px; font-weight:600; }
+  button:not(:disabled):hover, label.btn:hover { border-color:var(--accent); }
+  button.on, button.primary, label.btn.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  .ribbon button.big:disabled, .ribbon label.btn.big:has(input:disabled) { opacity:1; color:#9ca3af; }
+  .ribbon button.big:disabled .ic { opacity:.5; filter:grayscale(1); }
+  button.on:disabled, .big.on:disabled { background:transparent; color:#9ca3af; border-color:transparent; }
+  button:focus-visible, select:focus-visible, input:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
   select { font:inherit; padding:5px; border:1px solid var(--border); border-radius:6px; background:#fff; }
   input[type=text] { font:inherit; padding:6px; border:1px solid var(--border); border-radius:6px; width:120px; }
+  #old, #new { width:150px; }
   #goto { width:56px; } #count { color:var(--muted); padding:0 4px; white-space:nowrap; }
   input[type=number] { width:52px; padding:5px; border:1px solid var(--border); border-radius:6px; }
-  #msg { padding:8px 12px; color:var(--muted); min-height:34px; border-top:1px solid var(--border); background:var(--bg); }
-  #msg.err { color:#b91c1c; }
+  #msg { display:flex; align-items:center; gap:10px; padding:4px 12px; min-height:26px; font-size:12.5px; color:#4b5563; border-top:1px solid var(--border); background:var(--bg); }
+  #msg.err { color:#b91c1c; background:#fef2f2; } #msg.err #msg-text::before { content:"⚠ "; }
+  #msg.ok { color:#15803d; } #msg.ok #msg-text::before { content:"✔ "; }
+  body:not(.mode-read) #msg { background:#eef2ff; color:#312e81; border-top-color:#c7d2fe; }
+  #msg.busy::before { content:""; flex:none; width:14px; height:14px; border:2px solid var(--border); border-top-color:var(--accent); border-radius:50%; animation:spin .8s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  #msg-bar { width:200px; height:6px; }
+  #msg button { padding:2px 10px; font-size:12px; }
+  #msg code { font-size:11px; overflow-wrap:anywhere; }
+  body.busy .tabs button { pointer-events:none; opacity:.6; }
   #pages { display:flex; flex-direction:column; align-items:center; gap:18px; padding:8px 12px 60px; }
   .page { position:relative; background:#fff; box-shadow:0 1px 4px rgba(0,0,0,.2); max-width:100%; touch-action:pan-y; }
   .page img { display:block; width:100%; height:100%; user-select:none; -webkit-user-drag:none; }
-  .page .bar { position:absolute; top:-1px; right:-1px; display:flex; gap:2px; opacity:.85; z-index:3; }
-  .page .bar button { padding:2px 6px; font-size:12px; }
-  .page .num { position:absolute; bottom:-18px; left:0; right:0; text-align:center; color:var(--muted); font-size:12px; }
+  .page .bar { position:absolute; top:4px; right:4px; display:flex; gap:6px; z-index:3; visibility:hidden; }
+  .page:hover .bar, .page:focus-within .bar { visibility:visible; }
+  .page .bar button { min-width:28px; min-height:28px; padding:4px 8px; font-size:14px; background:rgba(255,255,255,.95); }
+  .page .num { position:absolute; bottom:-18px; left:0; right:0; text-align:center; color:#4b5563; font-size:12px; font-weight:500; }
   .ic.hl { background:#ffd400; padding:0 3px; }
-  .legal { max-width:260px; font-size:12px; color:var(--muted); margin:0; white-space:normal; line-height:1.35; }
+  .mini { font-size:11px; color:var(--muted); display:flex; align-items:center; gap:4px; }
+  input[type=color] { width:28px; height:24px; padding:1px; border:1px solid var(--border); border-radius:6px; background:#fff; }
+  #zoom-in, #zoom-out { min-width:32px; font-size:16px; font-weight:600; padding:4px 0; }
+  #find.nohit { border-color:#b91c1c; background:#fef2f2; }
   button.link { border:none; background:none; color:var(--accent); padding:0; text-decoration:underline; font-size:inherit; }
   main { display:flex; align-items:flex-start; }
   main #pages { flex:1; min-width:0; }
@@ -94,6 +113,10 @@
           text-align:center; color:var(--muted); background:var(--panel); line-height:1.6; }
   #drop.over { border-color:var(--accent); }
   #drop button { margin-top:8px; }
+  #drop p { margin:6px 0; }
+  #drop .open-main { display:inline-block; font-size:15px; padding:10px 18px; margin-bottom:4px; }
+  #drop .caps { color:var(--muted); font-size:13px; margin-top:10px; }
+  #drop .hint { font-size:12px; color:var(--muted); margin-top:14px; }
   .busy, .busy * { cursor:progress !important; }
   dialog { border:1px solid var(--border); border-radius:10px; padding:16px; max-width:min(420px, 92vw); }
   dialog textarea { width:100%; min-height:90px; font:inherit; padding:6px; border:1px solid var(--border); border-radius:6px; }
@@ -110,7 +133,14 @@
   #copilot-dlg { width:520px; } #ia-dlg { width:480px; }
   #resume-dlg { width:640px; }
   #resume-text { white-space:pre-wrap; max-height:55vh; overflow:auto; border:1px solid var(--border); border-radius:8px; padding:8px 10px; margin:8px 0; font-size:13px; line-height:1.45; min-height:80px; }
-  #find { width:140px; } #find-count { color:var(--muted); font-size:12px; min-width:64px; text-align:center; }
+  /* Le compteur de résultats s'affiche dans le champ, à droite, comme dans un navigateur : le ruban ne bouge pas. */
+  .tools:has(> #find) { position:relative; }
+  #find { width:180px; }
+  .tools:has(#find-count:not(:empty)) #find { padding-right:58px; }
+  #find::-webkit-search-cancel-button { appearance:none; }
+  #find-count { position:absolute; right:92px; top:50%; transform:translateY(-50%); pointer-events:none; color:var(--muted); font-size:12px; white-space:nowrap; }
+  #find-count:empty { display:none; }
+  #zoom { width:136px; }
   #side { position:sticky; top:calc(var(--head, 150px) + 8px); width:230px; flex:none; max-height:calc(100vh - var(--head, 150px) - 20px); display:flex; flex-direction:column;
           margin:8px 0 0 12px; background:var(--panel); border:1px solid var(--border); border-radius:10px; overflow:hidden; }
   .side-tabs { display:flex; gap:2px; padding:4px; border-bottom:1px solid var(--border); }
@@ -128,6 +158,7 @@
   #thumbs button.drop-before { box-shadow:0 -3px 0 var(--accent); }
   #thumbs button.drop-after { box-shadow:0 3px 0 var(--accent); }
   #thumbs button.dragging { opacity:.4; }
+  #thumbs button:hover { border-color:#93c5fd; }
   dialog label.row { display:flex; justify-content:space-between; align-items:center; gap:10px; margin:8px 0; }
   dialog label.row input { width:80px; }
   #thumbs button.cur { border-color:var(--accent); color:var(--accent); }
@@ -163,7 +194,23 @@
             border-radius:8px 8px 0 0; background:var(--bg); cursor:pointer; max-width:240px; white-space:nowrap; }
   .doctab span { overflow:hidden; text-overflow:ellipsis; }
   .doctab.on { background:#fff; color:var(--accent); font-weight:600; box-shadow:inset 0 3px 0 var(--accent); }
-  .doctab button { border:none; background:none; padding:0 4px; font-size:11px; color:var(--muted); }
+  .doctab button { border:none; background:none; min-width:24px; min-height:24px; padding:2px 6px; font-size:13px; border-radius:50%; line-height:1; color:var(--muted); }
+  .doctab button:hover { background:#fee2e2; color:#b91c1c; }
+  .doctab .dot { display:inline-block; width:7px; height:7px; border-radius:50%; background:var(--accent); margin-right:6px; vertical-align:middle; }
+  #pr-remove { margin-right:auto; color:#b91c1c; border-color:#fecaca; }
+  @media (max-width:1440px) {
+    .group { padding:0 5px; }
+    button.big, label.btn.big { min-width:58px; padding:4px 6px; }
+    #find { width:140px; } #goto { width:50px; }
+  }
+  @media (max-width:1100px) {
+    .ribbon section { flex-wrap:wrap; height:auto; min-height:96px; }
+    .group { padding:4px 6px; }
+    button.big, label.btn.big { min-width:52px; font-size:12px; padding:2px 5px; }
+    .ic { font-size:20px; line-height:24px; }
+    #find { width:170px; }
+    #list { width:240px; } #side { width:200px; } #thumbs img { width:100px; }
+  }
   #pages.two { flex-direction:row; flex-wrap:wrap; justify-content:center; align-content:flex-start; }
   #recents { display:flex; flex-direction:column; align-items:stretch; gap:4px; margin-top:18px; text-align:left; }
   #recents strong { color:var(--text); }
@@ -179,14 +226,14 @@
   <div class="top">
     <h1><img src="favicon.svg" alt="">Mim PDF</h1>
     <nav class="tabs" role="tablist" aria-label="Menus">
-      <button role="tab" data-tab="fichier">Fichier</button>
-      <button role="tab" data-tab="accueil" class="on">Accueil</button>
-      <button role="tab" data-tab="commenter">Commenter</button>
-      <button role="tab" data-tab="signer">Signer</button>
-      <button role="tab" data-tab="modifier">Modifier</button>
-      <button role="tab" data-tab="pages">Pages</button>
-      <button role="tab" data-tab="convertir">Convertir</button>
-      <button role="tab" data-tab="synthese">Synthèse</button>
+      <button role="tab" data-tab="fichier" tabindex="-1">Fichier</button>
+      <button role="tab" data-tab="accueil" class="on" tabindex="0" aria-selected="true">Accueil</button>
+      <button role="tab" data-tab="commenter" tabindex="-1">Commenter</button>
+      <button role="tab" data-tab="signer" tabindex="-1">Signer</button>
+      <button role="tab" data-tab="modifier" tabindex="-1">Modifier</button>
+      <button role="tab" data-tab="pages" tabindex="-1">Pages</button>
+      <button role="tab" data-tab="convertir" tabindex="-1">Convertir</button>
+      <button role="tab" data-tab="synthese" tabindex="-1">Résumer · Traduire</button>
     </nav>
     <span id="docname"></span>
   </div>
@@ -211,8 +258,8 @@
     </section>
     <section data-panel="accueil">
       <div class="group"><div class="tools">
-        <label class="btn big"><span class="ic">📂</span>Ouvrir<input class="open" type="file" accept="application/pdf,.pdf,image/png,image/jpeg" multiple hidden></label>
-        <button class="big" data-dl="pdf"><span class="ic">💾</span>Enregistrer</button>
+        <label class="btn big" title="Ouvrir un PDF (Ctrl+O)"><span class="ic">📂</span>Ouvrir<input class="open" type="file" accept="application/pdf,.pdf,image/png,image/jpeg" multiple hidden></label>
+        <button class="big" data-dl="pdf" title="Enregistrer le PDF modifié (Ctrl+S)"><span class="ic">💾</span>Enregistrer</button>
         <button class="big" data-print title="Imprimer (Ctrl+P)"><span class="ic">🖨</span>Imprimer</button>
       </div><span class="gl">Fichier</span></div>
       <div class="group"><div class="tools">
@@ -220,30 +267,30 @@
         <button class="big" id="redo" title="Rétablir (Ctrl+Y)"><span class="ic">↷</span>Rétablir</button>
       </div><span class="gl">Historique</span></div>
       <div class="group"><div class="tools">
-        <button class="big on" data-mode="read" title="Faire défiler et lire"><span class="ic">🖐</span>Lecture</button>
-      </div><span class="gl">Outil</span></div>
+        <button class="big on" data-mode="read" title="Quitter l'outil en cours et revenir à la lecture (Échap)"><span class="ic">🖐</span>Lecture</button>
+      </div><span class="gl">Quitter les outils</span></div>
       <div class="group"><div class="tools">
-        <button id="zoom-out" title="Zoom arrière">−</button>
-        <select id="zoom" title="Zoom">
+        <button id="zoom-out" title="Zoom arrière (Ctrl −)" aria-label="Zoom arrière">−</button>
+        <select id="zoom" title="Zoom (Ctrl 0 : largeur de page)">
           <option value="0.5">50 %</option><option value="0.75">75 %</option><option value="1" selected>100 %</option>
           <option value="1.25">125 %</option><option value="1.5">150 %</option><option value="2">200 %</option>
           <option value="3">300 %</option><option value="width">Largeur de page</option><option value="page">Page entière</option>
         </select>
-        <button id="zoom-in" title="Zoom avant">+</button>
-        <span class="stack"><button id="side-toggle" title="Afficher les signets et les pages en miniature">☰ Panneau</button>
-        <button id="two-pages" title="Afficher deux pages côte à côte">▯▯ Deux pages</button></span>
-        <button id="fullscreen" title="Plein écran (F11)">⛶</button>
+        <button id="zoom-in" title="Zoom avant (Ctrl +)" aria-label="Zoom avant">+</button>
+        <button class="big" id="side-toggle" title="Signets et miniatures des pages (F4). Glissez les miniatures pour réordonner les pages." aria-controls="side" aria-expanded="false"><span class="ic">☰</span>Panneau</button>
+        <button class="big" id="two-pages" title="Afficher deux pages côte à côte"><span class="ic">▯▯</span>Deux pages</button>
+        <button class="big" id="fullscreen" title="Plein écran (F11)"><span class="ic">⛶</span>Plein écran</button>
       </div><span class="gl">Affichage</span></div>
       <div class="group"><div class="tools">
-        <button id="prev" title="Page précédente">▲</button>
-        <input id="goto" type="number" min="1" value="1" title="Aller à la page"><span id="count">/ 0</span>
-        <button id="next" title="Page suivante">▼</button>
+        <button id="prev" title="Page précédente (PageUp)" aria-label="Page précédente">▲</button>
+        <input id="goto" type="number" min="1" value="1" title="Aller à la page (Home : première, End : dernière)"><span id="count"></span>
+        <button id="next" title="Page suivante (PageDown)" aria-label="Page suivante">▼</button>
       </div><span class="gl">Navigation</span></div>
       <div class="group"><div class="tools">
-        <input id="find" type="search" placeholder="Rechercher… (Ctrl+F)" title="Rechercher dans le document (Entrée : suivant, Maj+Entrée : précédent)">
-        <button id="find-prev" title="Occurrence précédente">◀</button>
-        <span id="find-count"></span>
-        <button id="find-next" title="Occurrence suivante">▶</button>
+        <input id="find" type="search" placeholder="Rechercher (Ctrl+F)" title="Rechercher dans le document (Entrée : suivant, Maj+Entrée : précédent)">
+        <button id="find-prev" title="Occurrence précédente (Maj+F3)" aria-label="Occurrence précédente">◀</button>
+        <span id="find-count" aria-live="polite"></span>
+        <button id="find-next" title="Occurrence suivante (F3)" aria-label="Occurrence suivante">▶</button>
       </div><span class="gl">Rechercher</span></div>
     </section>
     <section data-panel="commenter" hidden>
@@ -259,61 +306,56 @@
       <div class="group"><div class="tools">
         <button class="big" data-mode="note" title="Cliquez pour poser une note"><span class="ic">🗨</span>Note</button>
         <button class="big" data-mode="textbox" title="Cliquez pour ajouter une zone de texte encadrée"><span class="ic">▤</span>Zone de texte</button>
-      </div><span class="gl">Commentaires</span></div>
+        <button class="big" id="toggle-list" title="Afficher la liste des commentaires du document" aria-controls="list" aria-expanded="false"><span class="ic">☰</span>Liste des commentaires</button>
+      </div><span class="gl">Annoter</span></div>
       <div class="group"><div class="tools">
         <button class="big" data-mode="ink" title="Dessinez à main levée"><span class="ic">✏</span>Crayon</button>
         <button class="big" data-mode="rect" title="Tracez un rectangle"><span class="ic">□</span>Rectangle</button>
         <button class="big" data-mode="ellipse" title="Tracez une ellipse"><span class="ic">○</span>Ellipse</button>
         <button class="big" data-mode="arrow" title="Tracez une flèche"><span class="ic">↗</span>Flèche</button>
-        <span class="stack"><input id="draw-color" type="color" value="#d32f2f" title="Couleur des dessins, notes et tampons">
+        <span class="stack"><input id="draw-color" type="color" value="#d32f2f" title="Couleur des dessins, notes et tampons" aria-label="Couleur des dessins">
         <select id="draw-width" title="Épaisseur du trait"><option value="1">Fin</option><option value="2" selected>Moyen</option><option value="4">Épais</option></select></span>
       </div><span class="gl">Dessin</span></div>
       <div class="group"><div class="tools">
         <button class="big" data-mode="stamp" title="Cliquez pour poser le tampon choisi"><span class="ic">⎔</span>Tampon</button>
         <select id="stamp"></select>
       </div><span class="gl">Tampons</span></div>
-      <div class="group"><div class="tools">
-        <button class="big" id="toggle-list" title="Afficher la liste des commentaires"><span class="ic">☰</span>Liste</button>
-      </div><span class="gl">Commentaires</span></div>
     </section>
     <section data-panel="signer" hidden>
       <div class="group"><div class="tools">
-        <button class="big" data-mode="sign" title="Cliquez sur la page pour poser votre signature"><span class="ic">✍</span>Signer</button>
-        <button class="big" id="edit-sign"><span class="ic">⚙</span>Ma signature</button>
-      </div><span class="gl">Signature</span></div>
-      <div class="group"><div class="tools">
+        <button class="big" data-mode="sign" title="Cliquez sur la page pour poser votre signature (image)"><span class="ic">✍</span>Poser ma signature</button>
         <button class="big" data-mode="initials" title="Cliquez sur la page pour poser votre paraphe"><span class="ic">AB</span>Parapher</button>
-        <button class="big" id="initials-all" title="Paraphe en bas à droite de chaque page"><span class="ic">⧉</span>Toutes les pages</button>
-        <button class="big" id="edit-initials"><span class="ic">⚙</span>Mon paraphe</button>
-      </div><span class="gl">Paraphe</span></div>
-      <div class="group"><div class="tools">
+        <button class="big" id="initials-all" title="Paraphe en bas à droite de chaque page"><span class="ic">⧉</span>Parapher toutes les pages</button>
         <button class="big" data-mode="date" title="Cliquez pour écrire la date du jour"><span class="ic">📅</span>Date du jour</button>
-      </div><span class="gl">Date</span></div>
+      </div><span class="gl">Signature manuscrite</span></div>
+      <div class="group"><div class="tools">
+        <button class="big" id="edit-sign" title="Dessiner, taper ou importer votre signature (mémorisée sur cet appareil)"><span class="ic">⚙</span>Ma signature</button>
+        <button class="big" id="edit-initials" title="Créer ou modifier votre paraphe"><span class="ic">⚙</span>Mon paraphe</button>
+      </div><span class="gl">Mes modèles</span></div>
       <div class="group"><div class="tools">
         <button class="big" id="cert-sign" title="Signature électronique avec votre certificat personnel (.p12 / .pfx)"><span class="ic">🔏</span>Signer avec un certificat</button>
         <button class="big" id="cert-list" title="Voir qui a signé ce document et si le contenu signé est intact"><span class="ic">🛡</span>Signatures du document</button>
+        <button class="big" id="legal-more" title="Signature image : utile pour un document courant, mais sans valeur de signature électronique certifiée. Cliquez pour en savoir plus"><span class="ic">ⓘ</span>Valeur juridique</button>
       </div><span class="gl">Signature électronique</span></div>
-      <div class="group"><div class="tools">
-        <p class="legal">Signature image : utile pour un document courant, mais sans valeur de signature électronique certifiée.
-        <button id="legal-more" class="link">En savoir plus</button></p>
-      </div><span class="gl">Valeur juridique</span></div>
     </section>
     <section data-panel="modifier" hidden>
       <div class="group"><div class="tools">
-        <button class="big" data-mode="text" title="Cliquez sur la page à l'endroit où écrire"><span class="ic">✎</span>Écrire</button>
-        <span class="stack"><input id="size" type="number" value="12" min="4" max="96" title="Taille du texte">
-        <input id="color" type="color" value="#000000" title="Couleur du texte"></span>
+        <button class="big" data-mode="text" title="Cliquez sur la page pour ajouter un nouveau texte"><span class="ic">✎</span>Ajouter du texte</button>
+        <span class="stack">
+          <label class="mini">Taille <input id="size" type="number" value="12" min="4" max="96" title="Taille du texte en points"></label>
+          <label class="mini">Couleur <input id="color" type="color" value="#000000" title="Couleur du texte"></label>
+        </span>
       </div><span class="gl">Texte</span></div>
       <div class="group"><div class="tools">
         <button class="big" data-mode="erase" title="Tracez un rectangle pour effacer une zone"><span class="ic">▭</span>Effacer une zone</button>
       </div><span class="gl">Effacer</span></div>
       <div class="group"><div class="tools">
-        <span class="stack"><input id="old" type="text" placeholder="Rechercher…">
-        <input id="new" type="text" placeholder="Remplacer par…"></span>
-        <button class="big" id="replace"><span class="ic">⇄</span>Remplacer</button>
-      </div><span class="gl">Corriger</span></div>
+        <span class="stack"><input id="old" type="text" placeholder="Texte à corriger…" title="Tapez le mot exactement comme il apparaît dans le document">
+        <input id="new" type="text" placeholder="Nouveau texte…" title="Le texte qui le remplacera (police et position conservées)"></span>
+        <button class="big" id="replace" title="Remplace, partout dans le document, le texte exact saisi à gauche par celui de droite (la police et la position sont conservées)"><span class="ic">⇄</span>Remplacer</button>
+      </div><span class="gl">Corriger un mot</span></div>
       <div class="group"><div class="tools">
-        <button class="big" id="ocr" title="Reconnaître le texte d'un PDF scanné"><span class="ic">🔍</span>Reconnaître le texte</button>
+        <button class="big" id="ocr" title="Reconnaître le texte d'un PDF scanné. Nécessaire avant de corriger, rechercher ou convertir un scan"><span class="ic">🔍</span>Reconnaître le texte</button>
       </div><span class="gl">Scan (OCR)</span></div>
     </section>
     <section data-panel="pages" hidden>
@@ -328,7 +370,7 @@
         <button class="big" id="append-pdf" title="Ajouter d'autres PDF à la fin (fusionner)"><span class="ic">🔗</span>Fusionner</button>
         <button class="big" id="extract-pages" title="Créer un nouveau PDF avec certaines pages"><span class="ic">✂</span>Extraire des pages</button>
         <button class="big" id="split-bookmarks" title="Un PDF par partie du document, d'après ses signets (Bilan, Compte de résultat, Annexe…)"><span class="ic">🔖</span>Découper par signets</button>
-      </div><span class="gl">Organiser (glissez les miniatures pour changer l'ordre)</span></div>
+      </div><span class="gl">Organiser</span></div>
       <div class="group"><div class="tools">
         <button class="big" id="number-pages" title="Ajouter les numéros de page"><span class="ic">#</span>Numéroter</button>
         <button class="big" id="watermark" title="Écrire un filigrane en diagonale sur toutes les pages"><span class="ic">💧</span>Filigrane</button>
@@ -336,33 +378,35 @@
     </section>
     <section data-panel="convertir" hidden>
       <div class="group"><div class="tools">
-        <button class="big" data-dl="docx"><span class="ic">W</span>Word</button>
-        <button class="big" data-dl="xlsx"><span class="ic">X</span>Excel</button>
-        <button class="big" data-mode="table" title="Encadrez un tableau sur la page : il est exporté seul vers Excel"><span class="ic">⊞</span>Tableau vers Excel</button>
-        <button class="big" data-dl="txt"><span class="ic">T</span>Texte</button>
-        <button class="big" data-dl="pdf"><span class="ic">📄</span>PDF</button>
-      </div><span class="gl">Enregistrer au format</span></div>
+        <button class="big" data-dl="docx" title="Convertir en document Word modifiable, mise en page et tableaux conservés"><span class="ic">W</span>Word (.docx)</button>
+        <button class="big" data-dl="xlsx" title="Convertir en classeur Excel : chaque tableau du PDF devient une feuille"><span class="ic">X</span>Excel (.xlsx)</button>
+        <button class="big" data-dl="txt" title="Extraire tout le texte dans un fichier .txt"><span class="ic">T</span>Texte (.txt)</button>
+        <button class="big" data-dl="pdf" title="Enregistrer une copie PDF avec les modifications"><span class="ic">📄</span>Copie PDF</button>
+      </div><span class="gl">Convertir le document</span></div>
       <div class="group"><div class="tools">
+        <button class="big" data-mode="table" title="Encadrez un tableau sur la page : il est exporté seul vers Excel"><span class="ic">⊞</span>Tableau vers Excel</button>
         <button class="big" id="export-png" title="Enregistrer la page affichée en image PNG (150 ppp)"><span class="ic">🖼</span>Page en PNG</button>
         <button class="big" id="export-jpg" title="Enregistrer la page affichée en image JPEG (150 ppp)"><span class="ic">📷</span>Page en JPEG</button>
+      </div><span class="gl">Depuis la page affichée</span></div>
+      <div class="group"><div class="tools">
         <button class="big always" id="from-images" title="Créer un PDF à partir de photos ou de scans (une page par image)"><span class="ic">➕</span>PDF depuis images</button>
       </div><span class="gl">Images</span></div>
       <div class="group"><div class="tools">
         <button class="big" id="compress" title="Réduire le poids du PDF (images allégées, fichier nettoyé)"><span class="ic">🗜</span>Compresser</button>
-        <button class="big" id="flatten" title="Fixer commentaires et champs remplis dans les pages"><span class="ic">▤</span>Aplatir</button>
+        <button class="big" id="flatten" title="Fixer commentaires et champs remplis dans les pages"><span class="ic">⧈</span>Aplatir</button>
       </div><span class="gl">Optimiser</span></div>
     </section>
     <section data-panel="synthese" hidden>
       <div class="group"><div class="tools">
-        <button class="big" id="copilot" title="Copier le texte du document et ouvrir Copilot pour lui demander une synthèse"><span class="ic">✦</span>Envoyer à Copilot</button>
-      </div><span class="gl">Assistant Microsoft</span></div>
+        <button class="big" id="resume-rapide" title="Phrases clés, montants et dates du document, en un instant. Calculé sur ce PC, rien n'est envoyé"><span class="ic">≡</span>Résumé rapide</button>
+        <button class="big" id="resume-ia" title="Synthèse rédigée par une intelligence artificielle qui tourne sur ce PC : rien n'est envoyé"><span class="ic">✎</span>Résumé IA</button>
+      </div><span class="gl">Résumer</span></div>
       <div class="group"><div class="tools">
-        <button class="big" id="resume-rapide" title="Phrases clés, montants et dates du document, en un instant"><span class="ic">≡</span>Résumé rapide</button>
-        <button class="big" id="resume-ia" title="Synthèse rédigée par une intelligence artificielle qui tourne sur ce PC"><span class="ic">✎</span>Résumé IA</button>
-      </div><span class="gl">Sur ce PC, rien n'est envoyé</span></div>
+        <button class="big" id="traduire" title="Anglais, allemand, espagnol ou chinois → français, mise en page conservée. Tout se fait sur ce PC"><span class="ic">文A</span>Traduire en français</button>
+      </div><span class="gl">Traduire</span></div>
       <div class="group"><div class="tools">
-        <button class="big" id="traduire" title="Traduire en français un document en anglais, allemand, espagnol ou chinois, en gardant sa mise en page"><span class="ic">文A</span>Traduire en français</button>
-      </div><span class="gl">Traduction sur ce PC</span></div>
+        <button class="big" id="copilot" title="Copier le texte du document et ouvrir Copilot (service en ligne Microsoft) pour lui demander une synthèse"><span class="ic">✦</span>Envoyer à Copilot</button>
+      </div><span class="gl">Autre assistant (en ligne)</span></div>
     </section>
   </div>
   <div id="maj" hidden>
@@ -372,25 +416,28 @@
   </div>
   <div id="doctabs" hidden></div>
   <div id="info" hidden></div>
-  <div id="msg">Chargement…</div>
+  <div id="msg" role="status" aria-live="polite" aria-atomic="true"><span id="msg-text">Chargement…</span><progress id="msg-bar" max="1" hidden></progress></div>
 </header>
 <div id="drop">
-  Glissez un fichier PDF ici ou utilisez « Ouvrir un PDF ».<br>
-  <strong>Vos fichiers restent sur votre ordinateur</strong> : rien n'est envoyé sur Internet.<br>
+  <label class="btn primary open-main">📂 Ouvrir un PDF… (Ctrl+O)<input class="open" type="file" accept="application/pdf,.pdf,image/png,image/jpeg" multiple hidden></label>
+  <p>ou glissez un fichier PDF ici.</p>
+  <p><strong>Vos fichiers restent sur votre ordinateur</strong> : rien n'est envoyé sur Internet.</p>
+  <p class="caps">Lire · Surligner et commenter · Corriger un texte · Convertir en Word, Excel · Signer · Traduire · Résumer</p>
   <button data-sample="facture">Essayer avec une facture d'exemple</button>
   <button data-sample="facture-scannee">… ou une facture scannée</button>
+  <p class="hint">Raccourcis : Ctrl+O ouvrir · Ctrl+F rechercher · Ctrl+S enregistrer · Ctrl+molette zoom · F4 panneau · Échap quitter un outil</p>
   <div id="recents" hidden></div>
 </div>
 <main>
   <aside id="side" hidden>
-    <div class="side-tabs"><button data-side="outline" class="on">Signets</button><button data-side="thumbs">Pages</button>
-      <button id="side-close" title="Fermer le panneau">✖</button></div>
+    <div class="side-tabs" role="tablist"><button data-side="outline" role="tab" class="on">Signets</button><button data-side="thumbs" role="tab">Pages</button>
+      <button id="side-close" title="Fermer le panneau" aria-label="Fermer le panneau">✖</button></div>
     <div id="outline"></div>
     <div id="thumbs" hidden></div>
   </aside>
   <div id="pages"></div>
   <aside id="list" hidden>
-    <div class="list-head"><strong>Commentaires</strong><button id="close-list" title="Fermer">✖</button></div>
+    <div class="list-head"><strong>Commentaires</strong><button id="close-list" title="Fermer la liste des commentaires" aria-label="Fermer la liste des commentaires">✖</button></div>
     <div id="list-items"></div>
   </aside>
 </main>
@@ -419,7 +466,7 @@
 <dialog id="number-dlg">
   <form method="dialog">
     <h3>Numéroter les pages</h3>
-    <label class="row">Position <select id="num-pos">
+    <label class="row">Position <select id="num-pos" autofocus>
       <option value="bas-centre">En bas, au centre</option><option value="bas-droite">En bas, à droite</option><option value="bas-gauche">En bas, à gauche</option>
       <option value="haut-centre">En haut, au centre</option><option value="haut-droite">En haut, à droite</option><option value="haut-gauche">En haut, à gauche</option></select></label>
     <label class="row">Texte <select id="num-format">
@@ -455,7 +502,7 @@
     <h3>Compresser le PDF</h3>
     <p class="hint" id="compress-size"></p>
     <label class="check"><input type="radio" name="level" value="ecran"> <strong>Écran</strong> : le plus léger, pour l'envoyer par e-mail (images à 96 ppp)</label>
-    <label class="check"><input type="radio" name="level" value="standard" checked> <strong>Standard</strong> : bon compromis, lisible à l'impression (150 ppp)</label>
+    <label class="check"><input type="radio" name="level" value="standard" checked autofocus> <strong>Standard</strong> : bon compromis, lisible à l'impression (150 ppp)</label>
     <label class="check"><input type="radio" name="level" value="haute"> <strong>Haute qualité</strong> : allège sans perte visible (220 ppp)</label>
     <div class="actions"><button value="cancel">Annuler</button><button value="ok" class="primary">Compresser</button></div>
   </form>
@@ -472,14 +519,14 @@
     <datalist id="cert-reasons"><option value="J'approuve ce document"><option value="Je suis l'auteur de ce document"><option value="Lu et approuvé"><option value="Bon pour accord"></datalist>
     <label class="row">Lieu <input id="cert-location" type="text" placeholder="facultatif"></label>
     <label class="check"><input id="cert-visible" type="checkbox" checked> Afficher un cadre de signature sur la page</label>
-    <div class="actions"><button value="cancel">Annuler</button><button value="ok" class="primary">Continuer</button></div>
+    <div class="actions"><button value="cancel">Annuler</button><button value="ok" class="primary">Signer</button></div>
   </form>
 </dialog>
 <dialog id="copilot-dlg">
   <form method="dialog">
     <h3>Envoyer à Copilot</h3>
     <label for="copilot-ask">Votre demande :</label>
-    <textarea id="copilot-ask"></textarea>
+    <textarea id="copilot-ask" autofocus></textarea>
     <p class="hint" id="copilot-size"></p>
     <p class="hint">Mim PDF copie votre demande et le texte du document, puis ouvre Copilot : collez-les (Ctrl+V) et envoyez.
       Le texte est alors transmis à Microsoft, comme tout ce que vous écrivez dans Copilot.</p>
@@ -500,7 +547,7 @@
     <h3>Traduire en français</h3>
     <p class="hint" id="trad-guess"></p>
     <label>Langue du document :
-      <select id="trad-lang">
+      <select id="trad-lang" autofocus>
         <option value="en">Anglais</option>
         <option value="de">Allemand</option>
         <option value="es">Espagnol</option>
@@ -519,7 +566,7 @@
     <h3 id="resume-title">Résumé</h3>
     <p class="hint" id="resume-state"></p>
     <div id="resume-text"></div>
-    <div class="actions"><button type="button" id="resume-copy">Copier</button><button type="button" id="resume-save">Enregistrer en texte</button><button value="ok" class="primary">Fermer</button></div>
+    <div class="actions"><button type="button" id="resume-copy" class="primary">Copier</button><button type="button" id="resume-save">Enregistrer en texte</button><button value="ok">Fermer</button></div>
   </form>
 </dialog>
 <dialog id="split-dlg">
@@ -537,7 +584,7 @@
     <h3>Signatures du document</h3>
     <div id="sig-list"></div>
     <p class="hint">Mim PDF vérifie que le contenu signé n'a pas changé. Il ne vérifie pas si l'autorité qui a délivré le certificat est reconnue : en cas de doute, ouvrez aussi le document dans Adobe Acrobat Reader.</p>
-    <div class="actions"><button value="ok" class="primary">Fermer</button></div>
+    <div class="actions"><button value="ok">Fermer</button></div>
   </form>
 </dialog>
 <dialog id="legal-dlg">
@@ -547,7 +594,7 @@
     <p>Elle ne vaut pas signature électronique au sens du règlement européen eIDAS : en cas de litige, c'est à celui qui l'invoque de prouver qui a signé (Cour de cassation, chambre commerciale, 13 mars 2024).</p>
     <p><strong>Signer avec un certificat</strong> (onglet Signer) crée une vraie signature électronique, reconnue par Adobe Reader et les autres lecteurs. Sa valeur dépend de votre certificat : un certificat délivré par un prestataire de confiance donne une signature « avancée » ou « qualifiée ».</p>
     <p>Pour un contrat engageant, utilisez une <strong>signature électronique qualifiée</strong>, délivrée par un prestataire de confiance (liste publiée par l'ANSSI) : seule celle-ci est présumée fiable comme une signature manuscrite (Code civil, art. 1367, décret 2017-1416).</p>
-    <div class="actions"><button value="ok" class="primary">J'ai compris</button></div>
+    <div class="actions"><button value="ok">J'ai compris</button></div>
   </form>
 </dialog>
 <footer>
