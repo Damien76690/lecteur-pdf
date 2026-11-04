@@ -995,6 +995,71 @@ async function aiResume() {
   } finally { summarizing = false; }
 }
 
+// Traduction en français, faite sur ce PC par des modèles libres OPUS-MT (Transformers.js).
+// Chaque modèle (~100 Mo) est téléchargé une seule fois ; le document n'est jamais envoyé.
+// Le résultat est un nouveau PDF, ouvert dans un onglet : même mise en page, texte en français.
+const translators = {};
+let translating = false;
+
+async function translator(id, label) {
+  if (translators[id]) return translators[id];
+  const T = await import(TRANSFORMERS).catch(() => { throw new Error("impossible de charger le traducteur (vérifiez la connexion Internet pour ce premier usage)"); });
+  const files = {};
+  const progress = p => {
+    if (p.status !== "progress" || !p.total) return;
+    files[p.file] = [p.loaded, p.total];
+    const [got, all] = Object.values(files).reduce(([a, b], [x, y]) => [a + x, b + y], [0, 0]);
+    say(`Téléchargement du traducteur ${label} (une seule fois) : ${Math.floor(got / 1048576)} Mo sur ${Math.floor(all / 1048576)} Mo…`);
+  };
+  return translators[id] = await T.pipeline("translation", id, { device: "wasm", dtype: "q8", progress_callback: progress })
+    .catch(e => { delete translators[id]; throw e; });
+}
+
+async function translateDoc() {
+  if (translating) return say("Une traduction est déjà en cours.");
+  const dlg = $("#trad-dlg"), pick = $("#trad-lang");
+  const sample = doc.pages.some(p => p.hasText) ? core.translationSegments(doc.bytes).flat().map(s => s.text).join("\n") : "";
+  const guess = core.detectLanguage(sample);
+  pick.value = core.LANGUAGES[guess] ? guess : "en";
+  $("#trad-guess").textContent = !sample ? "Document scanné : son texte sera d'abord reconnu (OCR)."
+    : guess === "fr" ? "Ce document semble déjà en français : seuls les passages dans une autre langue seront traduits."
+    : core.LANGUAGES[guess] ? `Langue détectée : ${core.LANGUAGES[guess]}.` : "Langue non reconnue : choisissez-la.";
+  const ok = await new Promise(done => { dlg.onclose = () => done(dlg.returnValue === "ok"); dlg.returnValue = ""; dlg.showModal(); });
+  if (!ok) return say("Traduction annulée.");
+  const lang = pick.value, source = doc, name = doc.name, t0 = Date.now();
+  translating = true;
+  let result;
+  try {
+    result = await busy("Préparation de la traduction…", async () => {
+      const scans = source.pages.flatMap((p, i) => p.hasText ? [] : [i]);
+      let bytes = source.bytes;
+      if (scans.length) {
+        say(`Ce PDF est scanné : lecture du texte de ${plural(scans.length, "page")}…`);
+        bytes = await ocr(bytes, scans);
+      }
+      const pages = core.translationSegments(bytes);
+      if (!pages.flat().length) throw new Error("aucun texte à traduire dans ce document");
+      const chain = [];
+      for (const id of core.TRANSLATION_MODELS[lang]) chain.push(await translator(id, core.LANGUAGES[lang]));
+      const translate = async list => {
+        let out = list;
+        for (const run of chain) out = (await run(out, { max_new_tokens: 400 })).map(r => r.translation_text);
+        return out;
+      };
+      const done = await core.translateSegments(pages, translate, {
+        progress: (n, all) => say(`Traduction en français : ${Math.round(n / all * 100)} % (${n} passages sur ${all})…`),
+      });
+      say("Mise en page du document traduit…");
+      return core.applyTranslation(bytes, done, { scanned: scans });
+    });
+  } finally { translating = false; }
+  if (!result) return;
+  await openBytes(result, `${name} (français)`);
+  const min = Math.round((Date.now() - t0) / 60000);
+  say(`Traduction terminée en ${min < 1 ? "moins d'une minute" : plural(min, "minute")}, sur ce PC. ` +
+      "Relisez les noms propres et les termes techniques ; enregistrez le PDF traduit avec « Enregistrer sous ».");
+}
+
 // Glisser-déposer des miniatures pour changer l'ordre des pages.
 function dragThumbs(b, i) {
   b.draggable = true;
@@ -1453,6 +1518,7 @@ $("#split-bookmarks").onclick = splitByBookmarks;
 $("#copilot").onclick = sendToCopilot;
 $("#resume-rapide").onclick = quickResume;
 $("#resume-ia").onclick = aiResume;
+$("#traduire").onclick = translateDoc;
 $("#resume-copy").onclick = async () => say(await copyText($("#resume-text").textContent) ? "Résumé copié." : "La copie a échoué.", false);
 $("#resume-save").onclick = async () => say(await download(new Blob([$("#resume-text").textContent], { type: "text/plain;charset=utf-8" }), `${doc.name} - résumé.txt`, "text/plain"));
 $("#number-pages").onclick = numberPages;

@@ -16,6 +16,19 @@ jobs:
       - run: npm test
       - run: npm run build
 
+  # Traduction en français avec les vrais modèles libres (téléchargés depuis Hugging Face).
+  traduction:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm i --no-save @huggingface/transformers@4.3.1
+      - run: node scripts/essai-traduction.mjs
+
   # Outil en ligne de commande Python (pdftools.py), facultatif.
   python:
     runs-on: ubuntu-latest
