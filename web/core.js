@@ -1830,6 +1830,27 @@ function direct(src, tgt) {
   if (OPUS_PAIRS.has(`tc-big-${a}-${b}`)) return { model: opusModel(`tc-big-${a}-${b}`), prefix: "" };
   return null;
 }
+// Lance un modèle OPUS-MT multilingue (en-ROMANCE, en-mul, en-zh) avec son code de langue cible
+// (« >>pt<< ») : Transformers.js 4 ne le reconnaît pas dans le texte, on met donc son jeton en tête
+// des identifiants nous-mêmes. `pipe` est le pipeline « translation », `Tensor` celui de Transformers.js.
+export function prefixedRun(pipe, Tensor, prefix) {
+  const tok = pipe.tokenizer;
+  const id = tok.convert_tokens_to_ids(prefix);
+  if (id === undefined || id === null || id === tok.unk_token_id) throw new Error(`code de langue inconnu du modèle : ${prefix}`);
+  return async (texts, opts = {}) => {
+    const enc = tok(texts, { padding: true, truncation: true });
+    const [n, len] = enc.input_ids.dims;
+    const ids = Array.from(enc.input_ids.data, Number), mask = Array.from(enc.attention_mask.data, Number);
+    const ids2 = new BigInt64Array(n * (len + 1)), mask2 = new BigInt64Array(n * (len + 1));
+    for (let r = 0; r < n; r++) {
+      ids2[r * (len + 1)] = BigInt(id); mask2[r * (len + 1)] = 1n;
+      for (let c = 0; c < len; c++) { ids2[r * (len + 1) + c + 1] = BigInt(ids[r * len + c]); mask2[r * (len + 1) + c + 1] = BigInt(mask[r * len + c]); }
+    }
+    const out = await pipe.model.generate({ input_ids: new Tensor("int64", ids2, [n, len + 1]), attention_mask: new Tensor("int64", mask2, [n, len + 1]), max_new_tokens: 256, ...opts });
+    return tok.batch_decode(out, { skip_special_tokens: true }).map(t => ({ translation_text: t }));
+  };
+}
+
 // Étapes de traduction de `src` vers `tgt` : [{ model, prefix }], une ou deux (via l'anglais).
 export function translationRoute(src, tgt) {
   if (!LANGUAGES[src] || !LANGUAGES[tgt] || src === tgt) throw new Error(`traduction ${src} → ${tgt} impossible`);

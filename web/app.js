@@ -1020,13 +1020,13 @@ async function translator(id, label) {
 async function translationEngine(src, tgt) {
   const label = `${core.LANGUAGES[src].name} → ${core.LANGUAGES[tgt].name}`;
   const steps = [];
-  for (const r of core.translationRoute(src, tgt)) steps.push({ run: await translator(r.model, label), prefix: r.prefix });
+  for (const r of core.translationRoute(src, tgt)) {
+    const pipe = await translator(r.model, label);
+    steps.push(r.prefix ? core.prefixedRun(pipe, (await import(TRANSFORMERS)).Tensor, r.prefix) : pipe);
+  }
   return async list => {
     let out = list;
-    for (const s of steps) {
-      const input = s.prefix ? out.map(t => `${s.prefix} ${t}`) : out;
-      out = (await s.run(input, { max_new_tokens: 400 })).map(r => r.translation_text);
-    }
+    for (const run of steps) out = (await run(out, { max_new_tokens: 400 })).map(r => r.translation_text);
     return out;
   };
 }

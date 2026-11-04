@@ -1,7 +1,7 @@
 // Essai de la traduction avec les vrais modèles (lancé par la CI) :
 //   npm i --no-save @huggingface/transformers@4.3.1 && node scripts/essai-traduction.mjs
 // Les modèles sont rangés dans modeles-traduction/ (même format que dans l'application).
-import { pipeline, env } from "@huggingface/transformers";
+import { pipeline, env, Tensor } from "@huggingface/transformers";
 import * as mupdf from "mupdf";
 import * as PDFLib from "pdf-lib";
 import * as core from "../web/core.js";
@@ -14,10 +14,10 @@ const load = async id => loaded[id] ??= await pipeline("translation", id, { dtyp
 // Moteur src → tgt comme dans l'application : une ou deux étapes OPUS-MT, préfixe de langue cible si besoin.
 async function engine(src, tgt) {
   const steps = [];
-  for (const r of core.translationRoute(src, tgt)) steps.push({ run: await load(r.model), prefix: r.prefix });
+  for (const r of core.translationRoute(src, tgt)) { const pipe = await load(r.model); steps.push(r.prefix ? core.prefixedRun(pipe, Tensor, r.prefix) : pipe); }
   return async list => {
     let out = list;
-    for (const s of steps) out = (await s.run(s.prefix ? out.map(t => `${s.prefix} ${t}`) : out, { max_new_tokens: 400 })).map(r => r.translation_text);
+    for (const run of steps) out = (await run(out, { max_new_tokens: 400 })).map(r => r.translation_text);
     return out;
   };
 }
@@ -55,7 +55,7 @@ for (const [src, tgt, text, expect] of OTHERS) {
   console.log(`\n${core.LANGUAGES[src].name} → ${core.LANGUAGES[tgt].name} (${Date.now() - t0} ms)\n  ${text}  ->  ${s.fr}`);
   if (s.fr === text) fail("texte non traduit");
   const got = core.detectLanguage(s.fr);
-  if (got && got !== expect && !(expect === "pl" && !core.LANGUAGES[got].script)) fail(`langue obtenue : ${got}`);
+  if (got && got !== expect) fail(`langue obtenue : ${got}`);
 }
 // Contrôle par traduction inverse : les sigles et noms propres mal traduits sont gardés tels quels.
 const enfr = await engine("en", "fr"), fren = await engine("fr", "en");
