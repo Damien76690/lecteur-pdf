@@ -360,6 +360,9 @@
         <button class="big" id="resume-rapide" title="Phrases clés, montants et dates du document, en un instant"><span class="ic">≡</span>Résumé rapide</button>
         <button class="big" id="resume-ia" title="Synthèse rédigée par une intelligence artificielle qui tourne sur ce PC"><span class="ic">✎</span>Résumé IA</button>
       </div><span class="gl">Sur ce PC, rien n'est envoyé</span></div>
+      <div class="group"><div class="tools">
+        <button class="big" id="traduire" title="Traduire en français un document en anglais, allemand, espagnol ou chinois, en gardant sa mise en page"><span class="ic">文A</span>Traduire en français</button>
+      </div><span class="gl">Traduction sur ce PC</span></div>
     </section>
   </div>
   <div id="maj" hidden>
@@ -490,6 +493,25 @@
       Ensuite, tout se passe sur cet ordinateur : le document n'est jamais envoyé, et c'est gratuit.</p>
     <p class="hint" id="ia-device"></p>
     <div class="actions"><button value="cancel">Annuler</button><button value="ok" class="primary">Télécharger et résumer</button></div>
+  </form>
+</dialog>
+<dialog id="trad-dlg">
+  <form method="dialog">
+    <h3>Traduire en français</h3>
+    <p class="hint" id="trad-guess"></p>
+    <label>Langue du document :
+      <select id="trad-lang">
+        <option value="en">Anglais</option>
+        <option value="de">Allemand</option>
+        <option value="es">Espagnol</option>
+        <option value="zh">Chinois</option>
+      </select></label>
+    <p>Mim PDF crée une copie du document en français, avec la même mise en page, dans un nouvel onglet.
+      L'original n'est pas modifié.</p>
+    <p class="hint">La traduction se fait sur cet ordinateur avec des modèles libres et gratuits (OPUS-MT, université d'Helsinki).
+      Au premier usage de chaque langue, le modèle (environ 100 Mo, 200 Mo pour le chinois) est téléchargé une seule fois depuis Hugging Face ;
+      ensuite tout fonctionne sans Internet et le document n'est jamais envoyé. Comptez quelques minutes pour un long document.</p>
+    <div class="actions"><button value="cancel">Annuler</button><button value="ok" class="primary">Traduire</button></div>
   </form>
 </dialog>
 <dialog id="resume-dlg">

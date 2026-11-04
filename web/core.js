@@ -1768,3 +1768,223 @@ export function finalMessages(name, partials) {
   return [{ role: "system", content: SYSTEM },
           { role: "user", content: `Voici les résumés successifs des parties du document « ${name} ».\n\n${all}\n\n${FINAL}` }];
 }
+
+// ------------------------------------------------------------ traduction en français
+
+// Modèles de traduction libres (OPUS-MT de l'université d'Helsinki, licence CC-BY 4.0),
+// au format ONNX pour Transformers.js. Ils tournent sur ce PC : le texte n'est jamais envoyé.
+// Pas de modèle direct chinois -> français : on passe par l'anglais.
+export const LANGUAGES = { en: "anglais", de: "allemand", es: "espagnol", zh: "chinois" };
+export const TRANSLATION_MODELS = {
+  en: ["Xenova/opus-mt-en-fr"],
+  de: ["Xenova/opus-mt-de-fr"],
+  es: ["Xenova/opus-mt-es-fr"],
+  zh: ["Xenova/opus-mt-zh-en", "Xenova/opus-mt-en-fr"],
+};
+
+const STOPWORDS = {
+  en: "the and of to in is for with on that are by this from be as at or it an was have will our your their which not".split(" "),
+  de: "der die das und ist nicht mit für auf den dem des ein eine einen zu von im sich auch werden wird bei sind oder aus nach über".split(" "),
+  es: "el los las y que en es por para con una del se al como más su sus pero este esta son entre sobre".split(" "),
+  fr: "le les et des du est pour dans une que qui sur au aux avec par pas ce cette sont ou nous vous leur".split(" "),
+};
+
+// Langue principale d'un texte : "en", "de", "es", "zh", "fr", ou null si on ne sait pas.
+export function detectLanguage(text) {
+  const han = (text.match(/[㐀-鿿]/g) || []).length;
+  const letters = (text.match(/\p{L}/gu) || []).length;
+  if (!letters) return null;
+  if (han / letters > 0.15) return "zh";
+  const words = text.toLowerCase().match(/\p{L}+/gu) || [];
+  const score = Object.fromEntries(Object.keys(STOPWORDS).map(k => [k, 0]));
+  for (const w of words) for (const [k, list] of Object.entries(STOPWORDS)) if (list.includes(w)) score[k]++;
+  score.de += 2 * (text.match(/[äöüß]/gi) || []).length;
+  score.es += 2 * (text.match(/[ñ¿¡]/gi) || []).length;
+  score.fr += 2 * (text.match(/[èêàùç]/gi) || []).length;
+  const [best, n] = Object.entries(score).sort((a, b) => b[1] - a[1])[0];
+  return n ? best : (/[a-z]/i.test(text) ? "en" : null);
+}
+
+// Un morceau mérite d'être traduit s'il contient un vrai mot (pas seulement des chiffres,
+// une date, un code « Q1 » ou une adresse web).
+export function translatable(text) {
+  const t = text.replace(/\S+@\S+|https?:\/\/\S+|www\.\S+/g, " ");
+  return /[㐀-鿿]/.test(t) || /\p{L}{2,}/u.test(t);
+}
+
+// Morceaux de texte d'une page à traduire : les lignes horizontales, coupées aux grands écarts
+// (cases d'un tableau), puis regroupées en paragraphes quand une ligne continue la précédente
+// (même marge, même taille, ligne suivante commençant par une minuscule).
+function pieces(page) {
+  const st = page.toStructuredText("preserve-whitespace");
+  const out = [];
+  let cur = null, last = null, flat = true, base = 0;
+  const close = () => { if (cur && cur.text.trim()) out.push(cur); cur = null; last = null; };
+  st.walk({
+    beginLine(bbox, wmode, dir) { close(); flat = Math.abs(dir[1]) < 0.05 && dir[0] > 0; },
+    onChar(c, origin, font, size, quad, color) {
+      if (size < 1.2 || !flat) return;
+      const x0 = Math.min(quad[0], quad[4]), x1 = Math.max(quad[2], quad[6]);
+      const y0 = Math.min(quad[1], quad[3]), y1 = Math.max(quad[5], quad[7]);
+      if (!c.trim()) { if (cur) cur.text += " "; return; }
+      // Puce ou pictogramme (police de symboles, zone privée Unicode) : laissé en place, hors du texte.
+      if (/symbol|wingding|dingbat|webding/i.test(font.getName()) || /[\ue000-\uf8ff\u2022\u25a0-\u27bf]/.test(c)) { close(); return; }
+      if (cur && (x0 - last > Math.max(cur.size, size) * 0.9 || Math.abs(origin[1] - base) > size * 0.5 ||
+                  Math.abs(size - cur.size) > cur.size * 0.2)) close();
+      if (!cur) {
+        base = origin[1];
+        cur = { text: "", x0, x1, y0, y1, base, size, bold: font.isBold() || /bold|black|heavy/i.test(font.getName()),
+                color: Array.isArray(color) && color.length === 3 ? color : [0, 0, 0] };
+      }
+      cur.text += c;
+      cur.x0 = Math.min(cur.x0, x0); cur.x1 = Math.max(cur.x1, x1);
+      cur.y0 = Math.min(cur.y0, y0); cur.y1 = Math.max(cur.y1, y1);
+      cur.size = Math.max(cur.size, size);
+      last = x1;
+    },
+    endLine: close,
+  });
+  close();
+  st.destroy();
+  const paras = [];
+  for (const p of out) {
+    p.text = p.text.replace(/\s+/g, " ").trim();
+    const prev = paras.find(q => q.open && Math.abs(q.x0 - p.x0) < p.size * 0.6 && Math.abs(q.size - p.size) < 0.5 &&
+      p.y0 > q.lines.at(-1).y0 && p.y0 - q.lines.at(-1).y1 < p.size * 0.8 && /^[\p{Ll}(]/u.test(p.text));
+    if (prev) {
+      const end = prev.lines.at(-1).text;
+      prev.text = /\p{L}-$/u.test(end) ? prev.text.slice(0, -1) + p.text : prev.text + " " + p.text;
+      prev.lines.push(p);
+      prev.x1 = Math.max(prev.x1, p.x1); prev.y1 = Math.max(prev.y1, p.y1);
+      continue;
+    }
+    for (const q of paras) if (q.open && p.y0 > q.lines.at(-1).y1 + p.size * 2) q.open = false;
+    paras.push({ ...p, lines: [p], open: true });
+  }
+  return paras.map(({ open, ...p }) => p);
+}
+
+// Tout ce qui est à traduire, page par page (les passages déjà en français sont laissés tels quels) : [[{ text, x0, y0, x1, y1, base, size, bold, color, lines }]].
+export function translationSegments(bytes) {
+  return withMu(bytes, doc => {
+    const pages = [];
+    for (let i = 0; i < doc.countPages(); i++) {
+      const page = doc.loadPage(i);
+      try { pages.push(pieces(page).filter(p => translatable(p.text) && detectLanguage(p.text) !== "fr")); } finally { page.destroy(); }
+    }
+    return pages;
+  });
+}
+
+// Texte envoyé au modèle : un titre en MAJUSCULES est mis en minuscules (le modèle le
+// traduit bien mieux), puis remis en majuscules. Les textes longs sont coupés en phrases.
+function sentenceCase(t) { const l = t.toLocaleLowerCase(); return l.charAt(0).toLocaleUpperCase() + l.slice(1); }
+const isCaps = t => /\p{Lu}.*\p{Lu}/u.test(t) && !/\p{Ll}/u.test(t);
+function sentences(t, max = 350) {
+  if (t.length <= max) return [t];
+  const parts = t.match(/[^.!?。！？;]+[.!?。！？;]*\s*/g) || [t];
+  const out = [];
+  for (const s of parts) {
+    if (out.length && out.at(-1).length + s.length <= max) out[out.length - 1] += s;
+    else for (let k = 0; k < s.length; k += max) out.push(s.slice(k, k + max));
+  }
+  return out.map(s => s.trim()).filter(Boolean);
+}
+
+// Traduit tous les morceaux avec `translate(textes) -> textes` (par lots, chaque texte une seule
+// fois). `progress(fait, total)` suit l'avancement. Renvoie les morceaux avec leur traduction `fr`.
+export async function translateSegments(pages, translate, { batch = 8, progress = () => {} } = {}) {
+  const wanted = new Map();
+  for (const seg of pages.flat()) {
+    const src = isCaps(seg.text) ? sentenceCase(seg.text) : seg.text;
+    for (const s of sentences(src)) wanted.set(s, null);
+  }
+  const todo = [...wanted.keys()];
+  for (let k = 0; k < todo.length; k += batch) {
+    const part = todo.slice(k, k + batch);
+    const res = await translate(part);
+    part.forEach((s, j) => wanted.set(s, (res[j] ?? s).trim() || s));
+    progress(Math.min(k + batch, todo.length), todo.length);
+  }
+  return pages.map(list => list.map(seg => {
+    const caps = isCaps(seg.text);
+    let fr = sentences(caps ? sentenceCase(seg.text) : seg.text).map(s => wanted.get(s)).join(" ");
+    if (caps) fr = fr.toLocaleUpperCase("fr");
+    return { ...seg, fr };
+  }));
+}
+
+// Coupe `text` en lignes d'au plus `width` points à la taille `size`.
+function wrap(font, text, size, width) {
+  const lines = [];
+  let line = "";
+  for (const w of text.split(/\s+/)) {
+    const next = line ? `${line} ${w}` : w;
+    if (line && font.widthOfTextAtSize(next, size) > width) { lines.push(line); line = w; }
+    else line = next;
+  }
+  if (line) lines.push(line);
+  return lines;
+}
+
+// Taille et lignes pour que la traduction tienne dans la place du texte d'origine.
+export function fitText(font, text, { width, height, size, lines: count = 1 }) {
+  const min = Math.max(size * 0.55, 3);
+  for (let s = size; s >= min; s -= Math.max(size * 0.04, 0.25)) {
+    if (count === 1) {
+      if (font.widthOfTextAtSize(text, s) <= width * 1.04) return { size: s, lines: [text] };
+      continue;
+    }
+    const lines = wrap(font, text, s, width * 1.02);
+    if (lines.length * s * 1.18 <= height * 1.12 + s * 0.2) return { size: s, lines };
+  }
+  return count === 1 ? { size: min, lines: [text] } : { size: min, lines: wrap(font, text, min, width * 1.02) };
+}
+
+// Remplace dans le PDF chaque morceau par sa traduction (`fr`), à la même place : l'ancien
+// texte est vraiment supprimé, le nouveau écrit en Helvetica, même couleur, taille ajustée.
+// Sur une page scannée (texte reconnu par l'OCR), l'image est blanchie sous le texte.
+// `scanned` : numéros des pages scannées (à partir de 0).
+export async function applyTranslation(bytes, pages, { scanned = [] } = {}) {
+  const scan = new Set(scanned);
+  const cleaned = withMu(bytes, doc => {
+    pages.forEach((list, i) => {
+      if (!list.length) return;
+      const page = doc.loadPage(i);
+      const rects = list.flatMap(seg => seg.lines.map(l => {
+        const inset = Math.min(l.size * 0.05, (l.x1 - l.x0) / 4);
+        return [l.x0 + inset, l.y0 + l.size * 0.05, l.x1 - inset, l.y1 - l.size * 0.05];
+      }));
+      redact(page, rects, { images: false, lineArt: false });
+      if (scan.has(i)) {
+        const pad = 1.5;
+        redact(page, list.map(s => [s.x0 - pad, s.y0 - pad, s.x1 + pad, s.y1 + pad]), { text: false, images: true, lineArt: false });
+      }
+      page.destroy();
+    });
+    return saveMu(doc, bytes);
+  });
+  const geo = geometry(cleaned);
+  return (await withPdfLib(cleaned, async doc => {
+    const regular = await doc.embedFont(PDFLib.StandardFonts.Helvetica);
+    const bold = await doc.embedFont(PDFLib.StandardFonts.HelveticaBold);
+    pages.forEach((list, i) => {
+      if (!list.length) return;
+      const page = doc.getPage(i);
+      const rotate = PDFLib.degrees(page.getRotation().angle);
+      for (const seg of list) {
+        const font = seg.bold ? bold : regular;
+        const text = safeText(font, seg.fr.replace(/\s+/g, " ").trim());
+        const n = seg.lines.length;
+        const fit = fitText(font, text, { width: seg.x1 - seg.x0, height: seg.y1 - seg.y0, size: seg.size, lines: n });
+        const step = n > 1 ? Math.max((seg.lines.at(-1).base - seg.lines[0].base) / (n - 1) * fit.size / seg.size, fit.size * 1.1)
+                           : fit.size * 1.18;
+        const color = PDFLib.rgb(...seg.color.map(c => Math.min(1, Math.max(0, c))));
+        fit.lines.forEach((line, k) => {
+          const [x, y] = apply(geo[i].toPdf, seg.x0, seg.base + k * step);
+          page.drawText(line, { x, y, size: fit.size, font, color, rotate });
+        });
+      }
+    });
+  })).bytes;
+}

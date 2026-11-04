@@ -645,3 +645,67 @@ test("morceaux pour le modèle : coupés entre les pages, jamais trop longs", ()
   assert.match(core.summaryMessages("Facture", "texte", 2, 3)[1].content, /partie 2 sur 3/);
   assert.match(core.finalMessages("Facture", ["a", "b"])[1].content, /Partie 2 :\nb/);
 });
+
+// ------------------------------------------------------------ traduction en français
+
+test("langue détectée : anglais, allemand, espagnol, chinois, français", () => {
+  assert.equal(core.detectLanguage("The sales of the year are in line with the budget for this market."), "en");
+  assert.equal(core.detectLanguage("Die Umsätze des Jahres sind im Rahmen des Budgets für diesen Markt."), "de");
+  assert.equal(core.detectLanguage("Las ventas del año están en línea con el presupuesto para este mercado."), "es");
+  assert.equal(core.detectLanguage("今年的销售额符合该市场的预算。"), "zh");
+  assert.equal(core.detectLanguage("Les ventes de l'année sont conformes au budget pour ce marché."), "fr");
+  assert.equal(core.detectLanguage("1 678 2 260"), null);
+});
+
+test("seuls les vrais mots sont à traduire", () => {
+  assert.ok(core.translatable("Total sales"));
+  assert.ok(core.translatable("销售"));
+  assert.ok(!core.translatable("1 678,50 €"));
+  assert.ok(!core.translatable("31/12/2025"));
+  assert.ok(!core.translatable("Q1"));
+});
+
+async function englishPdf() {
+  const doc = await PDFLib.PDFDocument.create();
+  const page = doc.addPage([595, 842]);
+  const font = await doc.embedFont(PDFLib.StandardFonts.Helvetica);
+  const bold = await doc.embedFont(PDFLib.StandardFonts.HelveticaBold);
+  page.drawText("BANK SITUATION", { x: 50, y: 780, size: 18, font: bold, color: PDFLib.rgb(0.1, 0.1, 0.5) });
+  page.drawText("Sales", { x: 50, y: 700, size: 10, font });
+  page.drawText("1 678", { x: 300, y: 700, size: 10, font });
+  page.drawText("The customers in the Middle East are strongly represented and", { x: 50, y: 650, size: 10, font });
+  page.drawText("their orders are expected to grow next year.", { x: 50, y: 638, size: 10, font });
+  page.drawText("accord-enveloppe BPI du 29/10/26", { x: 50, y: 600, size: 10, font });
+  return doc.save();
+}
+
+test("traduire un PDF : même place, nombres et passages en français gardés", async () => {
+  const bytes = await englishPdf();
+  const pages = core.translationSegments(bytes);
+  const texts = pages[0].map(s => s.text);
+  assert.deepEqual(texts, ["BANK SITUATION", "Sales",
+    "The customers in the Middle East are strongly represented and their orders are expected to grow next year."]);
+  const dico = { "Bank situation": "Situation bancaire", "Sales": "Ventes",
+    "The customers in the Middle East are strongly represented and their orders are expected to grow next year.":
+      "Les clients du Moyen-Orient sont fortement représentés et leurs commandes devraient augmenter l'année prochaine." };
+  const seen = [];
+  const done = await core.translateSegments(pages, async list => { seen.push(...list); return list.map(t => dico[t]); });
+  assert.deepEqual(seen.sort(), Object.keys(dico).sort());          // titre en MAJUSCULES envoyé en minuscules
+  assert.equal(done[0][0].fr, "SITUATION BANCAIRE");
+  const out = await core.applyTranslation(bytes, done);
+  const result = text(out);
+  assert.match(result, /SITUATION BANCAIRE/);
+  assert.match(result, /Ventes/);
+  assert.match(result, /1 678/);
+  assert.match(result, /accord-enveloppe BPI du 29\/10\/26/);
+  assert.match(result, /Moyen-Orient/);
+  assert.doesNotMatch(result, /BANK|Sales|customers/);
+  // Le paragraphe traduit reste dans sa zone d'origine : même marge gauche, sous le titre, au-dessus de la suite.
+  const mu = core.openMu(out);
+  const [[start]] = core.search(mu, 0, "Les clients");
+  const [[end]] = core.search(mu, 0, "prochaine");
+  const [[next]] = core.search(mu, 0, "accord-enveloppe");
+  mu.destroy();
+  assert.ok(Math.abs(start[0] - 50) < 1, String(start));
+  assert.ok(start[1] > 842 - 665 && end[3] < next[1], `${start} ${end} ${next}`);
+});
