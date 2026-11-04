@@ -1891,6 +1891,14 @@ function sentences(t, max = 350) {
   return out.map(s => s.trim()).filter(Boolean);
 }
 
+// Petits défauts des modèles : lettre répétée en boucle (« Clientsssss »), point doublé,
+// texte qui s'emballe (bien plus long que l'original : on garde alors l'original).
+export function cleanTranslation(src, out) {
+  let t = String(out ?? "").replace(/(\p{L})\1{2,}/gu, "$1").replace(/(?<!\.)\.\.(?!\.)/g, ".").replace(/\s+/g, " ").trim();
+  if (!t || t.length > src.length * 3 + 40) return src;
+  return t;
+}
+
 // Traduit tous les morceaux avec `translate(textes) -> textes` (par lots, chaque texte une seule
 // fois). `progress(fait, total)` suit l'avancement. Renvoie les morceaux avec leur traduction `fr`.
 export async function translateSegments(pages, translate, { batch = 8, progress = () => {} } = {}) {
@@ -1903,7 +1911,7 @@ export async function translateSegments(pages, translate, { batch = 8, progress 
   for (let k = 0; k < todo.length; k += batch) {
     const part = todo.slice(k, k + batch);
     const res = await translate(part);
-    part.forEach((s, j) => wanted.set(s, (res[j] ?? s).trim() || s));
+    part.forEach((s, j) => wanted.set(s, cleanTranslation(s, res[j])));
     progress(Math.min(k + batch, todo.length), todo.length);
   }
   return pages.map(list => list.map(seg => {

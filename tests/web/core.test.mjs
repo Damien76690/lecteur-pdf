@@ -709,3 +709,11 @@ test("traduire un PDF : même place, nombres et passages en français gardés", 
   assert.ok(Math.abs(start[0] - 50) < 1, String(start));
   assert.ok(start[1] > 842 - 665 && end[3] < next[1], `${start} ${end} ${next}`);
 });
+
+test("défauts des modèles de traduction corrigés", () => {
+  assert.equal(core.cleanTranslation("Kunden", "Clientsssssss"), "Clients");
+  assert.equal(core.cleanTranslation("x", "Les recettes sont comprises dans le budget.."), "Les recettes sont comprises dans le budget.");
+  assert.equal(core.cleanTranslation("Sales", "Ventes ".repeat(30)), "Sales");
+  assert.equal(core.cleanTranslation("Etc", "Et ainsi de suite..."), "Et ainsi de suite...");
+  assert.equal(core.cleanTranslation("Sales", ""), "Sales");
+});
