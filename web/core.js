@@ -2074,7 +2074,10 @@ export function protectedTokens(text) {
   });
 }
 const norm = t => t.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
-const keepsTokens = (src, out) => protectedTokens(src).every(w => norm(out).includes(norm(w.replace(/s$/, ""))));
+const escapeRe = t => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+// Le sigle doit se retrouver entier dans la traduction (« US » n'est pas dans « NOUS »).
+const keepsTokens = (src, out) => protectedTokens(src).every(w =>
+  new RegExp(`(^|[^\\p{L}\\p{N}])${escapeRe(norm(w.replace(/s$/, "")))}(s?)(?![\\p{L}\\p{N}])`, "u").test(norm(out)));
 
 // Un texte court traduit mot à mot peut dériver (« OMV » -> « LES », « THEMIS » -> « LES MÉCONTENTS »).
 // La traduction inverse doit retrouver l'essentiel du texte de départ, sinon on garde l'original.
