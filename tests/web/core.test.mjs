@@ -646,15 +646,106 @@ test("morceaux pour le modèle : coupés entre les pages, jamais trop longs", ()
   assert.match(core.finalMessages("Facture", ["a", "b"])[1].content, /Partie 2 :\nb/);
 });
 
-// ------------------------------------------------------------ traduction en français
+// ------------------------------------------------------------ traduction
 
-test("langue détectée : anglais, allemand, espagnol, chinois, français", () => {
+test("langue détectée : anglais, allemand, espagnol, chinois, français et autres", () => {
   assert.equal(core.detectLanguage("The sales of the year are in line with the budget for this market."), "en");
   assert.equal(core.detectLanguage("Die Umsätze des Jahres sind im Rahmen des Budgets für diesen Markt."), "de");
   assert.equal(core.detectLanguage("Las ventas del año están en línea con el presupuesto para este mercado."), "es");
   assert.equal(core.detectLanguage("今年的销售额符合该市场的预算。"), "zh");
   assert.equal(core.detectLanguage("Les ventes de l'année sont conformes au budget pour ce marché."), "fr");
   assert.equal(core.detectLanguage("1 678 2 260"), null);
+  assert.equal(core.detectLanguage("ارتفعت المبيعات هذا العام بنسبة عشرة بالمئة."), "ar");
+  assert.equal(core.detectLanguage("Продажи за год соответствуют бюджету для этого рынка."), "ru");
+  assert.equal(core.detectLanguage("Продажі за рік відповідають бюджету для цього ринку."), "uk");
+  assert.equal(core.detectLanguage("今年の売上は予算に沿っています。"), "ja");
+  assert.equal(core.detectLanguage("올해 매출은 예산에 부합합니다."), "ko");
+  assert.equal(core.detectLanguage("Le vendite dell'anno sono in linea con il budget per questo mercato."), "it");
+  assert.equal(core.detectLanguage("As vendas do ano estão em linha com o orçamento para este mercado."), "pt");
+  assert.equal(core.detectLanguage("Sprzedaż w tym roku jest zgodna z budżetem dla tego rynku."), "pl");
+  assert.equal(core.detectLanguage("Bu yılın satışları bu pazar için bütçeye uygundur."), "tr");
+});
+
+test("route de traduction : modèle direct, sinon via l'anglais (ROMANCE, mul)", () => {
+  const models = r => r.map(x => x.model.replace("Xenova/opus-mt-", "") + (x.prefix ? ` ${x.prefix}` : ""));
+  assert.deepEqual(models(core.translationRoute("en", "fr")), ["en-fr"]);
+  assert.deepEqual(models(core.translationRoute("de", "es")), ["de-es"]);
+  assert.deepEqual(models(core.translationRoute("ar", "zh")), ["ar-en", "en-zh >>cmn_Hans<<"]);
+  assert.deepEqual(models(core.translationRoute("en", "zh-TW")), ["en-zh >>cmn_Hant<<"]);
+  assert.deepEqual(models(core.translationRoute("ja", "fr")), ["ja-en", "en-fr"]);
+  assert.deepEqual(models(core.translationRoute("pt", "fr")), ["ROMANCE-en", "en-fr"]);
+  assert.deepEqual(models(core.translationRoute("fr", "pt")), ["fr-en", "en-ROMANCE >>pt<<"]);
+  assert.deepEqual(models(core.translationRoute("en", "pl")), ["en-mul >>pol<<"]);
+  assert.deepEqual(models(core.translationRoute("tr", "en")), ["tr-en"]);
+  assert.throws(() => core.translationRoute("fr", "fr"));
+  const codes = Object.keys(core.LANGUAGES);
+  assert.ok(codes.length >= 80);
+  for (const a of codes) for (const b of codes) if (a !== b) assert.ok(core.translationRoute(a, b).length <= 2, `${a} ${b}`);
+  assert.equal(core.routeSize(core.translationRoute("ar", "zh")), 200);
+  assert.equal(core.routeSize(core.translationRoute("ar", "zh"), new Set(["Xenova/opus-mt-ar-en"])), 100);
+});
+
+test("sigles et nombres protégés, contrôle par traduction inverse", () => {
+  assert.deepEqual(core.protectedTokens("4,46 ME Budget including BASF US tariff of 12%"), ["4,46", "ME", "BASF", "US", "12%"]);
+  assert.deepEqual(core.protectedTokens("GENERAL KPIs"), ["KPIs"]);
+  assert.deepEqual(core.protectedTokens("The customers are represented"), []);
+  assert.ok(core.roundTrip("Carry forward", "Carry forward"));
+  assert.ok(core.roundTrip("Top 15 customers", "Top 15 clients"));
+  assert.ok(!core.roundTrip("THEMIS", "The themes"));
+  assert.ok(!core.roundTrip("OMV", "The products of production"));
+  assert.ok(core.roundTrip("1 678", "1 678"));
+});
+
+test("traduction : sigle perdu retraduit par morceaux, texte court douteux gardé", async () => {
+  const pages = [[{ text: "Budget of BASF US for 2026" }, { text: "THEMIS" }, { text: "Customers" }]];
+  const calls = [];
+  const engine = {
+    translate: async list => { calls.push([...list]); return list.map(t => ({
+      "Budget of BASF US for 2026": "Budget de la société pour 2026",   // sigle disparu : on retraduit par morceaux
+      "Budget of": "Budget de", "for": "pour", "THEMIS": "Les thèmes", "Customers": "Clients" })[t] ?? t); },
+    reverse: async list => list.map(t => ({ "Les thèmes": "The themes", "Clients": "Customers" })[t] ?? t),
+  };
+  const done = await core.translateSegments(pages, engine);
+  assert.equal(done[0][0].fr, "Budget de BASF US pour 2026");
+  assert.equal(done[0][1].fr, "THEMIS");          // la traduction inverse ne retrouve pas le mot : original gardé
+  assert.equal(done[0][2].fr, "Clients");
+  assert.ok(calls.some(c => c.includes("Budget of")));
+  // Titre en majuscules : ses sigles restent en majuscules dans le texte envoyé au modèle.
+  const [[caps]] = await core.translateSegments([[{ text: "BASF US SALES" }]], async list => { calls.push([...list]); return list.map(t => t.replace("Basf", "Basf").replace("sales", "ventes")); });
+  assert.ok(calls.at(-1).includes("Basf US sales"), JSON.stringify(calls.at(-1)));
+  assert.equal(caps.fr, "BASF US VENTES");
+});
+
+test("paragraphe sur plusieurs lignes et puces regroupés pour la traduction", async () => {
+  const doc = await PDFLib.PDFDocument.create();
+  const page = doc.addPage([595, 842]);
+  const font = await doc.embedFont(PDFLib.StandardFonts.Helvetica);
+  const lines = ["Cash spent this year includes the carry forward of the", "previous year and the new investments approved by the", "board in March."];
+  lines.forEach((l, k) => page.drawText(l, { x: 60, y: 700 - k * 12, size: 10, font }));
+  page.drawText("•", { x: 45, y: 650, size: 10, font });
+  page.drawText("First point of the list", { x: 60, y: 650, size: 10, font });
+  page.drawText("•", { x: 45, y: 636, size: 10, font });
+  page.drawText("Second point of the list", { x: 60, y: 636, size: 10, font });
+  const pages = core.translationSegments(await doc.save());
+  const texts = pages[0].map(s => s.text);
+  assert.deepEqual(texts, [lines.join(" "), "First point of the list", "Second point of the list"]);
+  assert.equal(pages[0][0].lines.length, 3);
+});
+
+test("écriture non latine dessinée par le navigateur (draw) et posée en image", async () => {
+  const bytes = await englishPdf();
+  const pages = core.translationSegments(bytes);
+  const done = pages.map(list => list.map(s => ({ ...s, fr: s.text === "Sales" ? "Продажи" : s.text })));
+  const asked = [];
+  const png = await (async () => { const d = await PDFLib.PDFDocument.create(); const p = d.addPage([10, 10]); p.drawRectangle({ x: 0, y: 0, width: 10, height: 10 }); return core.pageImage(core.openMu(await d.save()), 0, { dpi: 72 }); })();
+  const out = await core.applyTranslation(bytes, done, { draw: async (text, box) => { asked.push([text, box]); return { png, width: box.width, height: box.height }; } });
+  assert.equal(asked.length, 1);
+  assert.equal(asked[0][0], "Продажи");
+  assert.ok(asked[0][1].width > 0 && asked[0][1].size === 10);
+  const result = text(out);
+  assert.doesNotMatch(result, /Sales/);
+  assert.match(result, /SITUATION BANCAIRE|BANK SITUATION/);
+  assert.ok(core.pageInfo(out)[0].hasText !== undefined);
 });
 
 test("seuls les vrais mots sont à traduire", () => {
@@ -716,4 +807,6 @@ test("défauts des modèles de traduction corrigés", () => {
   assert.equal(core.cleanTranslation("Sales", "Ventes ".repeat(30)), "Sales");
   assert.equal(core.cleanTranslation("Etc", "Et ainsi de suite..."), "Et ainsi de suite...");
   assert.equal(core.cleanTranslation("Sales", ""), "Sales");
+  assert.equal(core.cleanTranslation("Themis", "Thémis"), "Themis");
+  assert.equal(core.cleanTranslation("Etat", "État"), "Etat");
 });
