@@ -2070,7 +2070,12 @@ export function translationSegments(bytes, target = "fr") {
 
 // Texte envoyé au modèle : un titre en MAJUSCULES est mis en minuscules (le modèle le traduit
 // bien mieux), puis remis en majuscules. Les textes longs sont coupés en phrases.
-function sentenceCase(t) { const l = t.toLocaleLowerCase(); return l.charAt(0).toLocaleUpperCase() + l.slice(1); }
+// (les sigles d'un titre en majuscules, « BASF US », restent en majuscules : le modèle les garde tels quels)
+function sentenceCase(t) {
+  const keep = new Set(protectedTokens(t));
+  const l = t.split(/(\s+)/).map(w => keep.has(w) || keep.has(w.replace(/[.,;:]$/, "")) ? w : w.toLocaleLowerCase()).join("");
+  return l.charAt(0).toLocaleUpperCase() + l.slice(1);
+}
 const isCaps = t => /\p{Lu}.*\p{Lu}/u.test(t) && !/\p{Ll}/u.test(t);
 function sentences(t, max = 350) {
   if (t.length <= max) return [t];

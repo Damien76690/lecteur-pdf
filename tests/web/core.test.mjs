@@ -710,6 +710,10 @@ test("traduction : sigle perdu retraduit par morceaux, texte court douteux gard�
   assert.equal(done[0][1].fr, "THEMIS");          // la traduction inverse ne retrouve pas le mot : original gardé
   assert.equal(done[0][2].fr, "Clients");
   assert.ok(calls.some(c => c.includes("Budget of")));
+  // Titre en majuscules : ses sigles restent en majuscules dans le texte envoyé au modèle.
+  const [[caps]] = await core.translateSegments([[{ text: "BASF US SALES" }]], async list => { calls.push([...list]); return list.map(t => t.replace("Basf", "Basf").replace("sales", "ventes")); });
+  assert.ok(calls.at(-1).includes("Basf US sales"), JSON.stringify(calls.at(-1)));
+  assert.equal(caps.fr, "BASF US VENTES");
 });
 
 test("paragraphe sur plusieurs lignes et puces regroupés pour la traduction", async () => {
