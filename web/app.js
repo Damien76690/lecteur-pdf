@@ -1106,16 +1106,19 @@ async function translator(id, label) {
 // Moteur de traduction src → tgt : une ou deux étapes (via l'anglais), chaque étape un modèle OPUS-MT.
 async function translationEngine(src, tgt) {
   const label = `${core.LANGUAGES[src].name} → ${core.LANGUAGES[tgt].name}`;
-  const steps = [];
+  const steps = [], pipes = [];
   for (const r of core.translationRoute(src, tgt)) {
     const pipe = await translator(r.model, label);
+    pipes.push(pipe);
     steps.push(r.prefix ? core.prefixedRun(pipe, (await import(TRANSFORMERS)).Tensor, r.prefix) : pipe);
   }
-  return async list => {
+  const run = async list => {
     let out = list;
     for (const run of steps) out = (await run(out, { max_new_tokens: 400 })).map(r => r.translation_text);
     return out;
   };
+  run.pieces = word => pipes[0].tokenizer.tokenize(word).length;   // sous-mots du modèle de départ
+  return run;
 }
 
 // Dessine un texte que Helvetica ne sait pas écrire (cyrillique, chinois, arabe…) : image PNG
@@ -1200,7 +1203,7 @@ async function translateDoc() {
       const translate = await translationEngine(src, tgt);
       let back = null;
       const reverse = async list => (back ??= await translationEngine(tgt, src))(list);
-      const done = await core.translateSegments(pages, { translate, reverse }, { amp: core.AMPERSAND[src] || null,
+      const done = await core.translateSegments(pages, { translate, reverse, pieces: translate.pieces }, { amp: core.AMPERSAND[src] || null,
         progress: (n, all) => say(`Traduction en ${target} : ${Math.round(n / all * 100)} % (${n} passages sur ${all})…`, "busy", n / all),
       });
       say("Mise en page du document traduit…");

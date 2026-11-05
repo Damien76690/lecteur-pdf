@@ -839,7 +839,7 @@ test("traduction : noms propres déformés repris sous un nom d'emprunt", async 
   const engine = { translate: async list => { calls.push(...list); return list.map(t => dico[t] ?? t); },
                    reverse: async list => list.map(t => back[t] ?? t) };
   const [done] = await core.translateSegments(pages, engine);
-  assert.equal(done[0].fr, "Fort impact de Framatome attendu");
+  assert.equal(done[0].fr, "Fort impact du Framatome attendu");         // « Fram-Bat » remis d'aplomb sur place
   assert.equal(done[1].fr, "Groupe Paralloy/Manoir USA");
   assert.equal(done[2].fr, "THEMIS");                                    // titre en majuscules rendu au mot près
   assert.equal(done[3].fr, "Participation de Framatome (30%)");          // en tête de phrase, mais connu du document
@@ -871,6 +871,11 @@ test("traduction : contrôle inverse assoupli, seconde chance en minuscules, nom
   const texts = ["Sales Evolution", "in progress", "Context & Assumptions", "SABIC", "ENERGY", "Ending", "Loans and Stakholders"];
   const [done] = await core.translateSegments([texts.map(text => ({ text }))], engine, { amp: "and" });
   assert.deepEqual(done.map(s => s.fr), ["Évolution des ventes", "en cours", "Contexte et hypothèses", "SABIC", "ÉNERGIE", "Fin", "Prêts et détenteurs de titres"]);
+  // Le retour ramène « Sabique » à « Sabic » : seul le découpage en sous-mots révèle le nom inconnu du modèle.
+  const back2 = { ...back, "Sabique": "Sabic" };
+  const pieces = w => ({ sabic: 2, energy: 1 })[w] ?? 1;
+  const [done2] = await core.translateSegments([["SABIC", "ENERGY"].map(text => ({ text }))], { ...engine, reverse: async list => list.map(t => back2[t] ?? t), pieces });
+  assert.deepEqual(done2.map(s => s.fr), ["SABIC", "ÉNERGIE"]);
 });
 
 test("lignes d'une liste aérée séparées, nombre en fin de phrase et « A » initial regroupés", async () => {

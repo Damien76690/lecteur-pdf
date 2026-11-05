@@ -2178,19 +2178,29 @@ const replaceWord = (text, w, by) => text.replace(new RegExp(`(^|[^\\p{L}\\p{N}]
 // Noms que les modèles recopient fidèlement : ils remplacent le temps d'une traduction un nom
 // propre que le modèle déforme (« Framatome » -> « Fram-Bat »), puis cèdent la place.
 const ALIASES = ["Renault", "Peugeot", "Danone", "Michelin"];
+const UNKNOWN_PIECES = 2;
 
 // Un nom propre déformé ou perdu (absent de la traduction et de sa traduction inverse) est
 // retraduit sous un nom d'emprunt, puis remis en place. Renvoie la traduction corrigée.
-async function fixNames(src, out, names, engine) {
+async function fixNames(src, out, names, engine, trace = () => {}) {
   const lost = names.filter(w => !hasWord(out, w));
   if (!lost.length) return out;
   const [back] = await engine.reverse([out]);
-  const gone = lost.filter(w => !hasWord(back ?? "", w)).slice(0, ALIASES.length);
+  let gone = lost.filter(w => !hasWord(back ?? "", w)).slice(0, ALIASES.length);
+  trace("nom perdu", src, out, back, gone.join(" "));
+  if (!gone.length) return out;
+  // Le nom déformé commence comme le vrai (« Fram-Bat », « Paralliage ») : remis d'aplomb sur place.
+  for (const w of gone) {
+    const start = w.slice(0, 4);
+    const fixed = out.replace(new RegExp(`(^|[^\\p{L}])${escapeRe(start)}[\\p{L}'’-]*`, "iu"), (m, before) => before + w);
+    if (fixed !== out) { out = fixed; gone = gone.filter(x => x !== w); }
+  }
   if (!gone.length) return out;
   let alt = src;
   gone.forEach((w, k) => { alt = replaceWord(alt, w, ALIASES[k]); });
   let [got] = await engine.translate([alt]);
   got = cleanTranslation(alt, got);
+  trace("nom d'emprunt", alt, got);
   if (got === alt || !gone.every((w, k) => (norm(got).match(new RegExp(norm(ALIASES[k]), "g")) || []).length === 1)) return out;
   gone.forEach((w, k) => { got = replaceWord(got, ALIASES[k], w); });
   return got;
@@ -2200,7 +2210,8 @@ async function fixNames(src, out, names, engine) {
 // « Contexte & Assumptions »), le mot est envoyé à sa place.
 export const AMPERSAND = { en: "and", fr: "et", de: "und", nl: "en", es: "y", it: "e", pt: "e", ro: "și", ca: "i", sv: "och", da: "og", no: "og" };
 
-// Traduit tous les morceaux. `engine` : { translate(textes) -> textes, reverse?(textes) -> textes }.
+// Traduit tous les morceaux. `engine` : { translate(textes) -> textes, reverse?(textes) -> textes,
+// pieces?(mot) -> nombre de sous-mots du modèle (un mot inconnu du modèle en a plusieurs) }.
 // Avec `reverse`, les noms propres déformés sont repris (voir fixNames) et les textes courts (noms,
 // intitulés) contrôlés par traduction inverse. `amp` : le mot de la langue de départ pour « & ».
 // `progress(fait, total)` suit l'avancement. Renvoie les morceaux avec leur traduction `fr`.
@@ -2255,18 +2266,21 @@ export async function translateSegments(pages, engine, { batch = 8, progress = (
       // Dans un intitulé en Majuscules Initiales, seuls les noms connus du document comptent (« Paralloy »,
       // pas « Evolution ») ; le reste est contrôlé par traduction inverse ci-dessous.
       const names = properNouns(s, known).filter(w => (!titleCase(s) || known.has(w)) && !hasWord(wanted.get(s), w));
-      if (names.length) { wanted.set(s, await fixNames(prep(s), wanted.get(s), names, engine)); trace("noms", s, wanted.get(s)); }
+      if (names.length) { wanted.set(s, await fixNames(prep(s), wanted.get(s), names, engine, trace)); trace("noms", s, wanted.get(s)); }
     }
     // Contrôle inverse des textes courts qui peuvent être des noms ou des sigles (ils portent une
     // majuscule) : la traduction inverse doit retrouver le texte de départ (score = part des mots
-    // retrouvés). Un mot seul rendu par le même mot à peine déformé (« Sabic » -> « Sabique »,
-    // retour « Sabica ») est un nom déformé : score nul.
+    // retrouvés). Un mot seul rendu par le même mot à peine déformé (« Sabic » -> « Sabique ») est
+    // un nom déformé (score nul) quand la traduction inverse ne le ramène pas au mot de départ, ou
+    // quand le modèle ne connaît pas ce mot (plusieurs sous-mots), à la différence de « Energy ».
+    const unknown = w => engine.pieces ? engine.pieces(w.toLocaleLowerCase()) >= UNKNOWN_PIECES : false;
     const scores = async (list, outs) => {
       const back = await engine.reverse(outs);
       return list.map((s, j) => {
         const out = outs[j], b = back[j] ?? "";
-        trace("retour", s, out, b);
-        if (oneWord(s) && oneWord(out) && norm(out) !== norm(s) && norm(b) !== norm(s) && norm(out).slice(0, 4) === norm(s).slice(0, 4)) return 0;
+        trace("retour", s, out, b, engine.pieces && oneWord(s) ? `${engine.pieces(s.toLocaleLowerCase())} sous-mots` : "");
+        if (oneWord(s) && oneWord(out) && norm(out) !== norm(s) && norm(out).slice(0, 4) === norm(s).slice(0, 4) &&
+            (norm(b) !== norm(s) || unknown(s))) return 0;
         return roundTripScore(s, b);
       });
     };
