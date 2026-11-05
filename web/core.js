@@ -625,7 +625,7 @@ export function signatures(forge, bytes) {
       if (!obj.isDictionary() || !obj.get("ByteRange").isArray() || !obj.get("Contents").isString()) continue;
       const range = [0, 1, 2, 3].map(k => obj.get("ByteRange").get(k).asNumber());
       const sig = { name: str(obj.get("Name")), reason: str(obj.get("Reason")), location: str(obj.get("Location")),
-        date: pdfDateToIso(str(obj.get("M"))), covers: range[2] + range[3] === bytes.length, intact: null, issuer: "" };
+        date: pdfDateToIso(str(obj.get("M"))), covers: range[2] + range[3] === bytes.length, end: range[2] + range[3], intact: null, issuer: "" };
       try {
         const asn = forge.asn1.fromDer(binary(obj.get("Contents").asByteString()), { strict: false, parseAllBytes: false });
         try {
@@ -2623,11 +2623,12 @@ export async function completeSigner(forge, bytes, req, signerId, { id = null, r
   const s = req.signers.find(x => x.id === signerId);
   const r = structuredClone(req);
   for (const f of r.fields) if (f.signer === signerId && !f.done) f.done = { at: now.toISOString(), skipped: true };
-  r.events.push({ type: "signed", signer: signerId, at: now.toISOString(), method: id ? "certificat" : "sceau",
+  r.events.push({ type: "signed", signer: signerId, name: s.name, email: s.email, at: now.toISOString(), method: id ? "certificat" : "sceau",
     certificate: id ? { name: id.name, issuer: id.issuer } : null, received: received || "" });
-  const out = writeRequest(bytes, r);
-  const seal = id || sealIdentity(forge, s, { bits, now });
   const done = requestStatus(r).complete;
+  let out = writeRequest(bytes, r);
+  if (done) out = addCompletionPage(out, r);     // dernière signature : certificat d'achèvement, scellé avec elle
+  const seal = id || sealIdentity(forge, s, { bits, now });
   return { bytes: signPdf(forge, out, seal, { reason: sealReason(r, `${s.name || s.email} a signé${done ? " (dernière signature)" : ""}`), date: now }), request: r };
 }
 
@@ -2665,3 +2666,139 @@ export function requestEmail(req, to, { fileName, site = "https://lecteur-pdf-li
 
 export const mailtoUrl = ({ to = "", subject = "", body = "" }) =>
   `mailto:${encodeURIComponent(to).replace(/%40/g, "@")}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body.replace(/\n/g, "\r\n"))}`;
+
+// ------------------------------------------------------------ preuve de la demande : certificat d'achèvement et contrôle des retouches
+
+const frDate = iso => { const d = new Date(iso); return isNaN(d) ? "?" : d.toLocaleString("fr-FR", { dateStyle: "long", timeStyle: "medium" }); };
+
+// Coupe un texte en lignes d'au plus `max` caractères (sans couper les mots, sauf trop longs).
+function wrapLines(text, max) {
+  const out = [];
+  for (const para of String(text).split("\n")) {
+    let line = "";
+    for (const word of para.split(/\s+/).filter(Boolean)) {
+      if (line && (line + " " + word).length > max) { out.push(line); line = ""; }
+      line = line ? line + " " + word : word;
+      while (line.length > max) { out.push(line.slice(0, max)); line = line.slice(max); }
+    }
+    out.push(line);
+  }
+  return out;
+}
+
+// Lignes du certificat d'achèvement : [texte, taille, gras, couleur grise ?].
+export function completionLines(req, last = null) {
+  const sent = req.events.find(e => e.type === "sent");
+  const L = [["Certificat d'achèvement de la signature", 17, true], ["", 6]];
+  const kv = (k, v) => L.push([`${k} : ${v}`, 10]);
+  kv("Document", req.title || "sans titre");
+  kv("Demande n°", req.id);
+  kv("Envoyée par", `${req.sender.name}${req.sender.email ? ` <${req.sender.email}>` : ""}, le ${frDate(sent?.at)}`);
+  L.push(["Empreinte SHA-256 du document envoyé (avant sa préparation) :", 10]);
+  L.push([sent?.hash || "?", 8, false, true]);
+  L.push(["", 6], ["Signataires", 13, true]);
+  req.signers.forEach((s, k) => {
+    const ev = req.events.find(e => e.type === "signed" && e.signer === s.id) || (last?.signer === s.id ? last : null);
+    L.push([`${k + 1}. ${s.name}${s.email ? ` <${s.email}>` : ""}`, 11, true]);
+    if (!ev) { L.push(["   n'a pas signé", 10]); return; }
+    const fields = req.fields.filter(f => f.signer === s.id);
+    L.push([`   a signé le ${frDate(ev.at)}, ${fields.length} case${fields.length > 1 ? "s" : ""} remplie${fields.length > 1 ? "s" : ""}`, 10]);
+    L.push([ev.method === "certificat" ? `   avec son certificat : ${ev.certificate?.name || "?"} (délivré par ${ev.certificate?.issuer || "?"})`
+                                        : "   avec un sceau Mim PDF (le contenu est protégé ; l'identité n'est pas attestée par un certificat)", 10]);
+    if (ev.received) { L.push(["   empreinte SHA-256 du document reçu :", 9]); L.push([`   ${ev.received}`, 8, false, true]); }
+  });
+  L.push(["", 8], ["Comment vérifier", 13, true]);
+  for (const t of ["Chaque étape (envoi, puis chaque signataire) est une signature électronique ajoutée à la suite du fichier : toute retouche ultérieure du contenu signé est détectée.",
+                   "Dans Mim PDF : onglet Signer, bouton Suivi. Dans Adobe Acrobat Reader : panneau Signatures (les sceaux Mim y apparaissent comme des signatures dont l'émetteur n'est pas reconnu, ce qui est normal).",
+                   "Un sceau Mim prouve que le document n'a pas changé depuis l'étape, pas qui l'a apposé. Pour une identité attestée, le signataire utilise un certificat."])
+    wrapLines(t, 95).forEach(l => L.push([l, 9, false, true]));
+  L.push(["", 8], [`Certificat établi par Mim PDF (logiciel libre, AGPL-3.0) le ${frDate(last?.at || new Date().toISOString())}.`, 8, false, true]);
+  return L;
+}
+
+// Ajoute le certificat d'achèvement en dernière page (enregistrement incrémental).
+export function addCompletionPage(bytes, req, last = null) {
+  return withMu(bytes, doc => {
+    const [w, h] = [595, 842];
+    let y = h - 60, ops = "";
+    ops += "q 0.15 0.39 0.92 RG 2 w 40 40 515 762 re S Q ";
+    for (const [t, size, bold, grey] of completionLines(req, last)) {
+      y -= size * 1.45;
+      if (y < 50) break;
+      if (!t) continue;
+      ops += `BT ${grey ? "0.35 0.38 0.45 rg" : "0.07 0.09 0.15 rg"} /${bold ? "HeB" : "He"} ${size} Tf 56 ${y.toFixed(1)} Td (${latin(t)}) Tj ET `;
+    }
+    const font = name => doc.addSimpleFont(new mupdf.Font(name), "Latin");
+    const res = doc.addObject({ Font: { He: font("Helvetica"), HeB: font("Helvetica-Bold") } });
+    doc.insertPage(-1, doc.addPage([0, 0, w, h], 0, res, ops));
+    return doc.saveToBuffer("incremental").asUint8Array().slice();
+  });
+}
+
+// Empreinte rapide (FNV-1a) d'une suite d'octets, pour comparer deux versions d'une page.
+function fnv(u8, h = 0x811c9dc5) {
+  for (let i = 0; i < u8.length; i++) { h ^= u8[i]; h = Math.imul(h, 0x01000193) >>> 0; }
+  return h;
+}
+
+// État d'une version du document : contenu de chaque page et annotations (avec leur étiquette Mim).
+function revisionState(bytes) {
+  return withMu(bytes, doc => {
+    const pages = [];
+    for (let i = 0; i < doc.countPages(); i++) {
+      const c = doc.findPage(i).get("Contents");
+      let h = 0x811c9dc5;
+      const streams = c.isArray() ? Array.from({ length: c.length }, (_, k) => c.get(k)) : [c];
+      for (const s of streams) { try { if (s.isStream()) h = fnv(s.readStream().asUint8Array(), h); } catch {} }
+      const annots = [];
+      const page = doc.loadPage(i);
+      try {
+        for (const a of page.getAnnotations()) {
+          if (a.getType() === "Widget") continue;
+          const b = a.getBounds().map(n => Math.round(n));
+          annots.push({ key: `${i}|${a.getType()}|${a.hasSubject() ? a.getSubject() : ""}|${b.join(",")}|${a.getContents() || ""}`,
+                        subject: a.hasSubject() ? a.getSubject() : "", type: a.getType() });
+        }
+      } finally { page.destroy(); }
+      pages.push({ content: h, annots });
+    }
+    return pages;
+  });
+}
+
+// Contrôle des retouches entre deux sceaux : chaque signataire ne doit avoir ajouté que ses propres cases
+// (et le dernier, la page du certificat d'achèvement). Renvoie la liste des anomalies, en clair.
+export function revisionProblems(forge, bytes, req) {
+  const tag = `Mim PDF, demande ${req.id} :`;
+  const sigs = signatures(forge, bytes).filter(s => s.reason.startsWith(tag) && s.end).sort((a, b) => a.end - b.end);
+  const problems = [];
+  if (!sigs.length) return problems;
+  const states = sigs.map(s => revisionState(bytes.subarray(0, s.end)));
+  for (let k = 1; k < sigs.length; k++) {
+    const before = states[k - 1], after = states[k], reason = sigs[k].reason;
+    const name = reason.slice(tag.length).replace(/ a signé.*$/, "").trim();
+    const s = req.signers.find(x => (x.name || x.email) === name);
+    const allowed = new Set(req.fields.filter(f => f.signer === s?.id).map(f => `Mim:${req.id}:${f.id}`));
+    const last = k === sigs.length - 1 && /dernière signature/.test(reason);
+    if (after.length !== before.length + (last ? 1 : 0))
+      problems.push(`${name} : le nombre de pages a changé (${before.length} → ${after.length}).`);
+    before.forEach((p, i) => {
+      if (!after[i]) return;
+      if (after[i].content !== p.content) problems.push(`${name} : le contenu de la page ${i + 1} a été modifié.`);
+      const old = new Set(p.annots.map(a => a.key)), now = new Set(after[i].annots.map(a => a.key));
+      for (const a of p.annots) if (!now.has(a.key)) problems.push(`${name} : un élément de la page ${i + 1} a été retiré ou déplacé.`);
+      for (const a of after[i].annots) if (!old.has(a.key) && !allowed.has(a.subject))
+        problems.push(`${name} : un ajout en page ${i + 1} ne correspond à aucune de ses cases (${a.type === "Stamp" ? "image" : a.type === "FreeText" ? "texte" : "commentaire"}).`);
+    });
+  }
+  // Ajouts faits après le dernier sceau (commentaires d'un lecteur, par exemple) : signalés, sans gravité.
+  const end = sigs.at(-1).end;
+  if (end < bytes.length) {
+    const fin = revisionState(bytes), lastState = states.at(-1);
+    const added = fin.reduce((n, p, i) => n + p.annots.filter(a => !new Set((lastState[i]?.annots || []).map(x => x.key)).has(a.key)).length, 0);
+    const changed = fin.some((p, i) => lastState[i] && p.content !== lastState[i].content) || fin.length !== lastState.length;
+    if (changed) problems.push("Le document a été modifié après la dernière signature.");
+    else if (added) problems.push(`${added} commentaire${added > 1 ? "s" : ""} ajouté${added > 1 ? "s" : ""} après la dernière signature (le contenu signé n'a pas changé).`);
+  }
+  return [...new Set(problems)];
+}

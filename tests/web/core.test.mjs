@@ -946,6 +946,14 @@ test("demande de signature : préparer, envoyer, deux signataires dans l'ordre, 
   assert.ok(core.keepsOriginal(sent, bytes), "remplir ne touche pas au document scellé");
   assert.equal(core.pendingFields(req, paul.id).length, 0);
   ({ bytes, request: req } = await core.completeSigner(forge, bytes, req, paul.id, { bits: 1024, received: "abc" }));
+  // Un ajout hors de ses cases avant le sceau de Paul serait signalé.
+  {
+    let b2 = core.annotate(sent, 0, { kind: "textbox", rect: [300, 100, 400, 120], text: "Remise 50 %" }), r2 = core.readRequest(sent);
+    ({ bytes: b2, request: r2 } = core.fillRequestField(b2, r2, sigPaul.id, tinyPng()));
+    ({ bytes: b2, request: r2 } = core.fillRequestField(b2, r2, datePaul.id, null));
+    ({ bytes: b2, request: r2 } = await core.completeSigner(forge, b2, r2, paul.id, { bits: 1024 }));
+    assert.deepEqual(core.revisionProblems(forge, b2, r2), ["Paul Martin : un ajout en page 1 ne correspond à aucune de ses cases (texte)."]);
+  }
   assert.equal(core.requestStatus(req).text, "1 sur 2 a signé. Prochain : Léa Petit.");
   const notes = b => core.listAnnotations(b).map(a => a.text).join("|");
   assert.match(notes(bytes), /05\/11\/2026/);
@@ -973,6 +981,18 @@ test("demande de signature : préparer, envoyer, deux signataires dans l'ordre, 
   const sigs = core.signatures(forge, bytes);
   assert.equal(sigs.length, 3);
   assert.ok(sigs.every(s => s.intact));
+
+  // Certificat d'achèvement ajouté en dernière page, et aucune retouche entre les sceaux.
+  assert.equal(core.pageInfo(bytes).length, 2);
+  const cert = text(bytes);
+  assert.match(cert, /Certificat d'achèvement de la signature/);
+  assert.match(cert, /Paul Martin <paul@exemple\.fr>/);
+  assert.match(cert, /avec son certificat : Jeanne Martin/);
+  assert.match(cert, new RegExp(req.events[0].hash));
+  assert.deepEqual(core.revisionProblems(forge, bytes, req), []);
+  // Un commentaire ajouté ensuite est signalé, sans gravité.
+  const commented = core.annotate(bytes, 0, { kind: "note", at: [300, 300], text: "Vu" });
+  assert.deepEqual(core.revisionProblems(forge, commented, req), ["1 commentaire ajouté après la dernière signature (le contenu signé n'a pas changé)."]);
 
   // Un octet du document envoyé modifié : le contrôle le voit.
   const bad = bytes.slice(), k = latin1(bytes).indexOf("Dupont");
