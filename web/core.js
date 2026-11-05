@@ -2003,10 +2003,11 @@ function pieces(page) {
   // Texte justifié : des mots d'une même ligne (même bloc, même ligne de base), séparés d'un peu
   // plus qu'une espace, forment un seul morceau.
   const wordy = t => /\p{L}{2,}/u.test(t) && !/^[\d\s.,%€$-]+$/.test(t);
+  const wordish = t => wordy(t) || /^\p{L}$/u.test(t);           // « A » en tête de phrase
   const merged = [];
   for (const p of out) {
     const q = merged.at(-1);
-    if (q && q.block === p.block && Math.abs(q.base - p.base) < p.size * 0.3 && !p.bullet && wordy(q.text) && wordy(p.text) &&
+    if (q && q.block === p.block && Math.abs(q.base - p.base) < p.size * 0.3 && !p.bullet && wordish(q.text) && wordy(p.text) &&
         p.x0 - q.x1 < p.size * 2.3 && p.x0 > q.x1 && Math.abs(p.size - q.size) < 0.5) {
       q.text += " " + p.text; q.x1 = p.x1; q.y0 = Math.min(q.y0, p.y0); q.y1 = Math.max(q.y1, p.y1);
       continue;
@@ -2014,15 +2015,20 @@ function pieces(page) {
     merged.push(p);
   }
   // Paragraphes : lignes successives d'un même bloc ; ou d'un bloc à l'autre quand la ligne
-  // précédente remplit son bloc jusqu'au bord droit (phrase coupée par la mise en page).
+  // précédente, assez longue, remplit son bloc jusqu'au bord droit (phrase coupée par la mise en
+  // page). L'interligne reste celui d'un paragraphe (une liste d'intitulés est plus aérée). Une
+  // ligne de fin réduite à un nombre (« … end of » / « 2026 ») suit la phrase.
   const paras = [];
   for (const p of merged) {
     const q = paras.at(-1);
     const l = q?.lines.at(-1);
     const sameCol = l && (Math.abs(l.x0 - p.x0) < p.size * 1.2 || Math.abs((l.x0 + l.x1) - (p.x0 + p.x1)) / 2 < p.size * 1.0);
-    const follows = l && (q.block === p.block || (l.x1 > l.blockRight - p.size * 1.5 && !/[.!?]$/.test(l.text)));
+    const follows = l && (q.block === p.block ||
+      (l.x1 > l.blockRight - p.size * 1.5 && l.x1 - l.x0 > p.size * 4 && !/[.!?]$/.test(l.text)));
+    const tail = l && !wordy(p.text) && /^\p{N}[\p{N}\s.,%€$-]*$/u.test(p.text) && !/[.!?:]$/.test(l.text) &&
+      p.x1 - p.x0 < (l.x1 - l.x0) * 0.5;
     if (q && follows && !p.bullet && Math.abs(q.size - p.size) < 0.5 && q.bold === p.bold &&
-        p.y0 > l.y0 && p.y0 - l.y1 < p.size * 0.9 && sameCol && wordy(l.text) && wordy(p.text) &&
+        p.y0 > l.y0 && p.base - l.base < p.size * 1.65 && sameCol && wordish(l.text) && (wordy(p.text) || tail) &&
         !(/[.!?:]$/.test(l.text) && !/[.!?]$/.test(p.text) && l.x1 < q.x1 - p.size * 3)) {
       q.text = /\p{L}-$/u.test(q.text) ? q.text.slice(0, -1) + p.text : q.text + " " + p.text;
       q.lines.push(p);
@@ -2108,13 +2114,18 @@ const keepsTokens = (src, out) => protectedTokens(src).every(w =>
 // Un texte court traduit mot à mot peut dériver (« OMV » -> « LES », « THEMIS » -> « LES MÉCONTENTS »).
 // La traduction inverse doit retrouver l'essentiel du texte de départ, sinon on garde l'original.
 const SMALL = new Set("the a an of to in on for and or de du des le la les un une et ou à au aux el los las y en der die das und".split(" "));
-export function roundTrip(src, back) {
-  const words = t => new Set((norm(t).match(/[a-z0-9]+/g) || []).filter(w => w.length > 1 && !SMALL.has(w)).map(w => w.slice(0, 5)));
-  const a = words(src), b = words(back);
-  if (!a.size) return true;
+const keyWords = t => new Set((norm(t).match(/[a-z0-9]+/g) || []).filter(w => w.length > 1 && !SMALL.has(w)));
+// Part des mots de `src` retrouvés dans `back` (même racine : « rate » / « rates », « end » / « ending »).
+export function roundTripScore(src, back) {
+  const same = (a, b) => { const n = Math.min(5, a.length, b.length); return a.slice(0, n) === b.slice(0, n); };
+  const a = keyWords(src), b = [...keyWords(back)];
+  if (!a.size) return 1;
   let common = 0;
-  for (const w of a) if (b.has(w)) common++;
-  return common / a.size >= (a.size <= 2 ? 1 : 0.5);
+  for (const w of a) if (b.some(v => same(w, v))) common++;
+  return common / a.size;
+}
+export function roundTrip(src, back) {
+  return roundTripScore(src, back) >= (keyWords(src).size === 1 ? 1 : 0.5);
 }
 
 // Petits défauts des modèles : lettre répétée en boucle (« Clientsssss »), point doublé,
@@ -2122,8 +2133,9 @@ export function roundTrip(src, back) {
 export function cleanTranslation(src, out) {
   let t = String(out ?? "").replace(/(\p{L})\1{2,}/gu, "$1").replace(/(?<!\.)\.\.(?!\.)/g, ".").replace(/\s+/g, " ").trim();
   if (!t || t.length > src.length * 3 + 40) return src;
-  // Même mot aux accents près (« THEMIS » -> « Thémis ») : un nom propre, gardé tel quel.
-  if (norm(t) === norm(src)) return src;
+  // Un mot seul que le modèle allonge (« Total » -> « Total général ») : le mot suffit.
+  const first = t.split(" ");
+  if (!/\s/.test(src.trim()) && first.length > 1 && norm(first[0]) === norm(src.trim())) return first[0];
   return t;
 }
 
@@ -2153,35 +2165,159 @@ async function translateProtected(texts, engine) {
   return out;
 }
 
-// Traduit tous les morceaux. `engine` : { translate(textes) -> textes, reverse?(textes) -> textes }.
-// Les textes courts (noms, intitulés) sont contrôlés par traduction inverse quand `reverse` existe.
+// Noms propres d'un texte : mots à majuscule initiale hors début de phrase (« Framatome », « Paralloy »),
+// et en début de phrase quand ils figurent ainsi ailleurs dans le document (`known`).
+const wordsOf = t => t.match(/\p{L}[\p{L}'’]*/gu) || [];
+const isName = w => /^\p{Lu}\p{Ll}{3,}$/u.test(w);
+export function properNouns(text, known = new Set()) {
+  return [...new Set(wordsOf(text).filter((w, k) => isName(w) && (k > 0 || known.has(w))))];
+}
+// Mots entiers, aux accents et à la casse près.
+const hasWord = (text, w) => new RegExp(`(^|[^\\p{L}\\p{N}])${escapeRe(norm(w))}(?![\\p{L}\\p{N}])`, "u").test(norm(text));
+const replaceWord = (text, w, by) => text.replace(new RegExp(`(^|[^\\p{L}\\p{N}])${escapeRe(w)}(?![\\p{L}\\p{N}])`, "giu"), `$1${by}`);
+// Noms que les modèles recopient fidèlement : ils remplacent le temps d'une traduction un nom
+// propre que le modèle déforme (« Framatome » -> « Fram-Bat »), puis cèdent la place.
+const ALIASES = ["Renault", "Peugeot", "Danone", "Michelin"];
+const UNKNOWN_PIECES = 2;
+
+// Un nom propre déformé ou perdu (absent de la traduction et de sa traduction inverse) est
+// retraduit sous un nom d'emprunt, puis remis en place. Renvoie la traduction corrigée.
+async function fixNames(src, out, names, engine, trace = () => {}) {
+  const lost = names.filter(w => !hasWord(out, w));
+  if (!lost.length) return out;
+  const [back] = await engine.reverse([out]);
+  let gone = lost.filter(w => !hasWord(back ?? "", w)).slice(0, ALIASES.length);
+  trace("nom perdu", src, out, back, gone.join(" "));
+  if (!gone.length) return out;
+  // Le nom déformé commence comme le vrai (« Fram-Bat », « Paralliage ») : remis d'aplomb sur place.
+  for (const w of gone) {
+    const start = w.slice(0, 4);
+    const fixed = out.replace(new RegExp(`(^|[^\\p{L}])${escapeRe(start)}[\\p{L}'’-]*`, "iu"), (m, before) => before + w);
+    if (fixed !== out) { out = fixed; gone = gone.filter(x => x !== w); }
+  }
+  if (!gone.length) return out;
+  let alt = src;
+  gone.forEach((w, k) => { alt = replaceWord(alt, w, ALIASES[k]); });
+  let [got] = await engine.translate([alt]);
+  got = cleanTranslation(alt, got);
+  trace("nom d'emprunt", alt, got);
+  if (got === alt || !gone.every((w, k) => (norm(got).match(new RegExp(norm(ALIASES[k]), "g")) || []).length === 1)) return out;
+  gone.forEach((w, k) => { got = replaceWord(got, ALIASES[k], w); });
+  return got;
+}
+
+// « & » dans la langue de départ : les modèles le traduisent mal (« Context & Assumptions » ->
+// « Contexte & Assumptions »), le mot est envoyé à sa place.
+export const AMPERSAND = { en: "and", fr: "et", de: "und", nl: "en", es: "y", it: "e", pt: "e", ro: "și", ca: "i", sv: "och", da: "og", no: "og" };
+
+// Traduit tous les morceaux. `engine` : { translate(textes) -> textes, reverse?(textes) -> textes,
+// pieces?(mot) -> nombre de sous-mots du modèle (un mot inconnu du modèle en a plusieurs) }.
+// Avec `reverse`, les noms propres déformés sont repris (voir fixNames) et les textes courts (noms,
+// intitulés) contrôlés par traduction inverse. `amp` : le mot de la langue de départ pour « & ».
 // `progress(fait, total)` suit l'avancement. Renvoie les morceaux avec leur traduction `fr`.
-export async function translateSegments(pages, engine, { batch = 8, progress = () => {} } = {}) {
+export async function translateSegments(pages, engine, { batch = 8, progress = () => {}, amp = null, trace = () => {} } = {}) {
   if (typeof engine === "function") engine = { translate: engine };
+  const prep = s => amp ? s.replace(/\s&\s/g, ` ${amp} `) : s;
+  const oneWord = t => !/\s/.test(t.trim());
+  const nWords = t => t.trim().split(/\s+/).length;
+  // Un intitulé (« Context and Assumptions », « Ending ») peut être réessayé en minuscules ; pas un
+  // nom en Majuscules Initiales (« Baker Hughes »), que le modèle recopie à raison.
+  const lowerable = s => !protectedTokens(s).length && (oneWord(s) || /\s\p{Ll}/u.test(prep(s)));
+  const titleCase = s => nWords(s) <= 4 && wordsOf(s).every(w => w.length < 2 || /^\p{Lu}/u.test(w));
+  // Même texte en minuscules (majuscule initiale remise) : le modèle prend moins les intitulés pour des noms.
+  const lowerTry = async list => {
+    const res = await translateProtected(list.map(s => prep(s).toLocaleLowerCase()), engine);
+    return list.map((s, j) => res[j] && res[j] !== prep(s).toLocaleLowerCase() ? res[j].charAt(0).toLocaleUpperCase() + res[j].slice(1) : null);
+  };
   const wanted = new Map();
+  const seen = new Map();                                 // mot -> vu en milieu de phrase / vu en minuscules
   for (const seg of pages.flat()) {
     const src = isCaps(seg.text) ? sentenceCase(seg.text) : seg.text;
     for (const s of sentences(src)) wanted.set(s, null);
+    if (!isCaps(seg.text)) wordsOf(seg.text).forEach((w, k) => {
+      const e = seen.get(w.toLocaleLowerCase()) || (seen.set(w.toLocaleLowerCase(), { mid: false, low: false }), seen.get(w.toLocaleLowerCase()));
+      if (isName(w) && k > 0) e.mid = true;
+      if (w === w.toLocaleLowerCase()) e.low = true;
+    });
   }
+  const known = new Set([...seen].filter(([, e]) => e.mid && !e.low).map(([w]) => w.charAt(0).toLocaleUpperCase() + w.slice(1)));
   const todo = [...wanted.keys()];
   for (let k = 0; k < todo.length; k += batch) {
     const part = todo.slice(k, k + batch);
-    const res = await translateProtected(part, engine);
+    const res = await translateProtected(part.map(prep), engine);
     part.forEach((s, j) => wanted.set(s, res[j]));
     progress(Math.min(k + batch, todo.length), todo.length);
   }
+  todo.forEach(s => trace("traduction", s, wanted.get(s)));
+  // Un intitulé court recopié tel quel (« Ending », « Sales Evolution »), ou un mot seul rendu par
+  // une expression (« Ending » -> « Fin de la procédure ») : le modèle l'a pris pour un nom ;
+  // nouvel essai en minuscules, puis majuscule initiale.
+  const copied = todo.filter(s => /\p{Lu}/u.test(s) && nWords(s) <= 4 && lowerable(s) &&
+    (wanted.get(s) === prep(s) || (oneWord(s) && nWords(wanted.get(s)) >= 3)));
+  for (let k = 0; k < copied.length; k += batch) {
+    const part = copied.slice(k, k + batch);
+    const alt = await lowerTry(part);
+    part.forEach((s, j) => {
+      if (alt[j] && (wanted.get(s) === prep(s) || nWords(alt[j]) < nWords(wanted.get(s)))) { trace("minuscules", s, alt[j]); wanted.set(s, alt[j]); }
+    });
+  }
   if (engine.reverse) {
-    const short = todo.filter(s => s.split(/\s+/).length <= 4 && wanted.get(s) !== s);
+    for (const s of todo) {
+      // Dans un intitulé en Majuscules Initiales, seuls les noms connus du document comptent (« Paralloy »,
+      // pas « Evolution ») ; le reste est contrôlé par traduction inverse ci-dessous.
+      const names = properNouns(s, known).filter(w => (!titleCase(s) || known.has(w)) && !hasWord(wanted.get(s), w));
+      if (names.length) { wanted.set(s, await fixNames(prep(s), wanted.get(s), names, engine, trace)); trace("noms", s, wanted.get(s)); }
+    }
+    // Contrôle inverse des textes courts qui peuvent être des noms ou des sigles (ils portent une
+    // majuscule) : la traduction inverse doit retrouver le texte de départ (score = part des mots
+    // retrouvés). Un mot seul rendu par le même mot à peine déformé (« Sabic » -> « Sabique ») est
+    // un nom déformé (score nul) quand la traduction inverse ne le ramène pas au mot de départ, ou
+    // quand le modèle ne connaît pas ce mot (plusieurs sous-mots), à la différence de « Energy ».
+    const unknown = w => engine.pieces ? engine.pieces(w.toLocaleLowerCase()) >= UNKNOWN_PIECES : false;
+    const scores = async (list, outs) => {
+      const back = await engine.reverse(outs);
+      return list.map((s, j) => {
+        const out = outs[j], b = back[j] ?? "";
+        trace("retour", s, out, b, engine.pieces && oneWord(s) ? `${engine.pieces(s.toLocaleLowerCase())} sous-mots` : "");
+        if (oneWord(s) && oneWord(out) && norm(out) !== norm(s) && norm(out).slice(0, 4) === norm(s).slice(0, 4) &&
+            (norm(b) !== norm(s) || unknown(s))) return 0;
+        return roundTripScore(s, b);
+      });
+    };
+    const strict = s => keyWords(s).size <= 2 ? 1 : 0.5, loose = s => keyWords(s).size === 1 ? 1 : 0.5;
+    const short = todo.filter(s => nWords(s) <= 4 && wanted.get(s) !== prep(s) && /\p{Lu}/u.test(s));
+    const doubtful = [];                                  // [texte, traduction, score]
     for (let k = 0; k < short.length; k += batch) {
       const part = short.slice(k, k + batch);
-      const back = await engine.reverse(part.map(s => wanted.get(s)));
-      part.forEach((s, j) => { if (!roundTrip(s, back[j] ?? "")) wanted.set(s, s); });
+      const sc = await scores(part, part.map(s => wanted.get(s)));
+      part.forEach((s, j) => { if (sc[j] < strict(s)) doubtful.push([s, wanted.get(s), sc[j]]); });
+    }
+    // Seconde chance en minuscules pour les intitulés (« Context and Assumptions » -> « Contexte et
+    // acomptes », puis « contexte et hypothèses ») : la version dont la traduction inverse retrouve
+    // le mieux le texte l'emporte ; faute de version assez fidèle, le texte reste tel quel.
+    for (let k = 0; k < doubtful.length; k += batch) {
+      const part = doubtful.slice(k, k + batch);
+      const cand = part.filter(([s]) => lowerable(s));
+      const alt = cand.length ? await lowerTry(cand.map(([s]) => s)) : [];
+      const tried = cand.filter(([s, out], j) => alt[j] && alt[j] !== out).map(([s], j) => [s, alt[cand.indexOf(cand.find(c => c[0] === s))]]);
+      const sc = tried.length ? await scores(tried.map(([s]) => s), tried.map(([, a]) => a)) : [];
+      for (const [s, out, score] of part) {
+        const t = tried.findIndex(([x]) => x === s);
+        const altScore = t >= 0 ? sc[t] : -1;
+        if (altScore >= strict(s)) wanted.set(s, tried[t][1]);
+        else if (score >= loose(s)) wanted.set(s, out);
+        else if (altScore >= loose(s)) wanted.set(s, tried[t][1]);
+        else wanted.set(s, s);
+        trace("contrôle", s, wanted.get(s));
+      }
     }
   }
   return pages.map(list => list.map(seg => {
     const caps = isCaps(seg.text);
     let fr = sentences(caps ? sentenceCase(seg.text) : seg.text).map(s => wanted.get(s)).join(" ");
     if (caps) fr = fr.toLocaleUpperCase();
+    // Un titre en majuscules rendu au mot près (« THEMIS » -> « THÉMIS ») : un nom, gardé tel quel.
+    if (caps && norm(fr) === norm(seg.text)) fr = seg.text;
     return { ...seg, fr };
   }));
 }

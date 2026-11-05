@@ -807,6 +807,95 @@ test("défauts des modèles de traduction corrigés", () => {
   assert.equal(core.cleanTranslation("Sales", "Ventes ".repeat(30)), "Sales");
   assert.equal(core.cleanTranslation("Etc", "Et ainsi de suite..."), "Et ainsi de suite...");
   assert.equal(core.cleanTranslation("Sales", ""), "Sales");
-  assert.equal(core.cleanTranslation("Themis", "Thémis"), "Themis");
-  assert.equal(core.cleanTranslation("Etat", "État"), "Etat");
+  assert.equal(core.cleanTranslation("Defense", "Défense"), "Défense");        // vraie traduction, accents compris
+  assert.equal(core.cleanTranslation("Total", "Total général"), "Total");       // mot seul allongé
+  assert.equal(core.cleanTranslation("Loan", "Prêt"), "Prêt");
+  // Racines comparées souplement par la traduction inverse.
+  assert.ok(core.roundTrip("Rate", "Rates"));
+  assert.ok(core.roundTrip("Ending", "End"));
+  assert.ok(core.roundTrip("Sales Evolution", "Evolution of sales"));
+  assert.ok(!core.roundTrip("Sabic", "Sabique"));
+});
+
+test("traduction : noms propres déformés repris sous un nom d'emprunt", async () => {
+  const pages = [[{ text: "Strong Framatome impact expected" }, { text: "Paralloy/Manoir Group USA" }, { text: "THEMIS" },
+                  { text: "Framatome shareholding (30%)" }, { text: "Sales drop compared to 2025" }, { text: "Integration of the Paralloy network" }]];
+  assert.deepEqual(core.properNouns("Strong Framatome impact expected"), ["Framatome"]);
+  assert.deepEqual(core.properNouns("Framatome shareholding (30%)"), []);
+  assert.deepEqual(core.properNouns("Framatome shareholding (30%)", new Set(["Framatome"])), ["Framatome"]);
+  const calls = [];
+  const dico = {
+    "Strong Framatome impact expected": "Fort impact du Fram-Bat attendu",
+    "Strong Renault impact expected": "Fort impact de Renault attendu",
+    "Paralloy/Manoir Group USA": "Groupe Paralliage/Manoir USA",
+    "Renault/Manoir Group USA": "Groupe Renault/Manoir USA",
+    "Framatome shareholding (30%)": "Part de Fram-Bat (30%)",
+    "Renault shareholding (30%)": "Participation de Renault (30%)",
+    "Sales drop compared to 2025": "Baisse des ventes par rapport à 2025",
+    "Themis": "Thémis", "Integration of the Paralloy network": "Intégration du réseau Paralloy",
+  };
+  const back = { "Fort impact du Fram-Bat attendu": "Strong Fram-Bat impact expected", "Groupe Paralliage/Manoir USA": "Paralliage/Manoir Group USA",
+                 "Part de Fram-Bat (30%)": "Share of Fram-Bat (30%)", "Baisse des ventes par rapport à 2025": "Sales drop compared to 2025", "Thémis": "Themis" };
+  const engine = { translate: async list => { calls.push(...list); return list.map(t => dico[t] ?? t); },
+                   reverse: async list => list.map(t => back[t] ?? t) };
+  const [done] = await core.translateSegments(pages, engine);
+  assert.equal(done[0].fr, "Fort impact du Framatome attendu");         // « Fram-Bat » remis d'aplomb sur place
+  assert.equal(done[1].fr, "Groupe Paralloy/Manoir USA");
+  assert.equal(done[2].fr, "THEMIS");                                    // titre en majuscules rendu au mot près
+  assert.equal(done[3].fr, "Part de Framatome (30%)");                   // en tête de phrase, mais connu du document
+  assert.equal(done[4].fr, "Baisse des ventes par rapport à 2025");      // mot courant : pas de nom d'emprunt
+  assert.ok(!calls.some(c => /Renault.*drop/.test(c)));
+});
+
+test("traduction : « & » remplacé par le mot, intitulé recopié retraduit en minuscules", async () => {
+  const dico = { "Context and Assumptions": "Contexte et hypothèses", "Ending": "Ending", "ending": "fin",
+                 "Historical view": "Historical view", "historical view": "vue historique",
+                 "Baker Hughes": "Baker Hughes", "baker hughes": "boulanger hughes", "BASF US": "BASF US" };
+  const seen = [];
+  const engine = async list => { seen.push(...list); return list.map(t => dico[t] ?? t); };
+  const [done] = await core.translateSegments([["Context & Assumptions", "Ending", "Historical view", "Baker Hughes", "BASF US"].map(text => ({ text }))], engine, { amp: "and" });
+  // Un nom en Majuscules Initiales recopié par le modèle (« Baker Hughes ») n'est pas réessayé en minuscules.
+  assert.deepEqual(done.map(s => s.fr), ["Contexte et hypothèses", "Fin", "Vue historique", "Baker Hughes", "BASF US"]);
+  assert.ok(!seen.includes("basf us") && !seen.includes("baker hughes"), "sigle et nom ne sont pas réessayés en minuscules");
+  assert.equal(core.AMPERSAND.en, "and");
+});
+
+test("traduction : contrôle inverse assoupli, seconde chance en minuscules, nom déformé gardé", async () => {
+  const dico = { "Sales Evolution": "Évolution des ventes", "in progress": "en cours", "Context and Assumptions": "Contexte et acomptes",
+                 "context and assumptions": "contexte et hypothèses", "Sabic": "Sabique", "sabic": "sabique", "Energy": "Énergie",
+                 "Ending": "Fin de la procédure", "ending": "fin", "Loans and Stakholders": "Prêts et détenteurs de titres" };
+  const back = { "Évolution des ventes": "Sales trends", "en cours": "ongoing", "Contexte et acomptes": "Context and deposits",
+                 "Contexte et hypothèses": "Context and assumptions", "Sabique": "Sabica", "Énergie": "Energy", "Fin": "End",
+                 "Prêts et détenteurs de titres": "Loans and securities holders" };
+  const engine = { translate: async list => list.map(t => dico[t] ?? t), reverse: async list => list.map(t => back[t] ?? t) };
+  const texts = ["Sales Evolution", "in progress", "Context & Assumptions", "SABIC", "ENERGY", "Ending", "Loans and Stakholders"];
+  const [done] = await core.translateSegments([texts.map(text => ({ text }))], engine, { amp: "and" });
+  assert.deepEqual(done.map(s => s.fr), ["Évolution des ventes", "en cours", "Contexte et hypothèses", "SABIC", "ÉNERGIE", "Fin", "Prêts et détenteurs de titres"]);
+  // Le retour ramène « Sabique » à « Sabic » : seul le découpage en sous-mots révèle le nom inconnu du modèle.
+  const back2 = { ...back, "Sabique": "Sabic" };
+  const pieces = w => ({ sabic: 2, energy: 1 })[w] ?? 1;
+  const [done2] = await core.translateSegments([["SABIC", "ENERGY"].map(text => ({ text }))], { ...engine, reverse: async list => list.map(t => back2[t] ?? t), pieces });
+  assert.deepEqual(done2.map(s => s.fr), ["SABIC", "ÉNERGIE"]);
+});
+
+test("lignes d'une liste aérée séparées, nombre en fin de phrase et « A » initial regroupés", async () => {
+  const doc = await PDFLib.PDFDocument.create();
+  const page = doc.addPage([842, 595]);
+  const font = await doc.embedFont(PDFLib.StandardFonts.HelveticaBold);
+  // Sommaire : intitulés courts, interligne double -> un morceau chacun.
+  ["BANK SITUATION", "CONTEXT & ASSUMPTIONS", "SALES", "CAPEX"].forEach((t, k) => page.drawText(t, { x: 225, y: 500 - k * 30, size: 16, font }));
+  // Phrase coupée dont la dernière ligne n'est qu'un nombre.
+  page.drawText("•", { x: 500, y: 300, size: 16, font });
+  page.drawText("Expected recovery of the market end of", { x: 518, y: 300, size: 16, font });
+  page.drawText("2026", { x: 518, y: 281, size: 16, font });
+  // Texte étroit, un mot par ligne, commençant par « A ».
+  page.drawText("A", { x: 40, y: 200, size: 16, font });
+  page.drawText("portfolio", { x: 65, y: 200, size: 16, font });
+  page.drawText("equally split between the", { x: 40, y: 181, size: 16, font });
+  page.drawText("different areas", { x: 40, y: 162, size: 16, font });
+  const texts = core.translationSegments(await doc.save())[0].map(s => s.text);
+  assert.deepEqual(texts, ["BANK SITUATION", "CONTEXT & ASSUMPTIONS", "SALES", "CAPEX",
+    "Expected recovery of the market end of 2026", "A portfolio equally split between the different areas"]);
+  const segs = core.translationSegments(await doc.save())[0];
+  assert.equal(segs[4].lines.length, 2);
 });

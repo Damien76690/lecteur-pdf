@@ -15,11 +15,13 @@ const load = async id => loaded[id] ??= await pipeline("translation", id, { dtyp
 async function engine(src, tgt) {
   const steps = [];
   for (const r of core.translationRoute(src, tgt)) { const pipe = await load(r.model); steps.push(r.prefix ? core.prefixedRun(pipe, Tensor, r.prefix) : pipe); }
-  return async list => {
+  const run = async list => {
     let out = list;
     for (const run of steps) out = (await run(out, { max_new_tokens: 400 })).map(r => r.translation_text);
     return out;
   };
+  run.pieces = word => steps.length && loaded[core.translationRoute(src, tgt)[0].model].tokenizer.tokenize(word).length;
+  return run;
 }
 const SAMPLES = {
   en: ["BANK SITUATION", "Top 15 Customers", "Middle East/Asia partners strongly represented",
@@ -66,6 +68,29 @@ for (const s of checked) console.log(`  ${s.text}  ->  ${s.fr}`);
 for (const s of checked) for (const w of core.protectedTokens(s.text)) if (!s.fr.includes(w)) fail(`${w} perdu dans « ${s.fr} »`);
 if (checked[0].fr !== "THEMIS") fail("THEMIS devrait être gardé");
 if (!/clients/i.test(checked[5].fr)) fail("Top 15 Customers devrait être traduit");
+// Cas vus sur une vraie présentation : mots courts d'un tableau, noms propres déformés par le modèle,
+// titres en majuscules, phrase coupée avant un nombre.
+const REAL = ["Rate", "Ending", "Defense", "August", "Dec.", "Sales Evolution", "in progress", "Total", "Context & Assumptions",
+  "Loans and Stakholders", "SABIC", "SADARA", "DOW CHEMICAL", "Strong Framatome impact expected", "Paralloy/Manoir Group USA",
+  "Integration of the Paralloy network", "Expected recovery of the market end of 2026", "Ramp up expected in H2",
+  "GENERAL KPIs", "CASH-FLOW", "BANK & LOANS", "Not affected Sales : less than 17%", "6 New Salesperson for Europe, Asia and America zones"];
+const t3 = Date.now();
+console.log("\nSous-mots du modèle anglais : " + ["energy", "sabic", "sadara", "petrochemical", "nuclear", "railway", "shareholding", "framatome",
+  "paralloy", "themis", "defense", "ending", "emerson", "vossloh", "exxon", "formosa", "indorama", "comments", "summary", "overview"].map(w => `${w}=${enfr.pieces(w)}`).join(" "));
+const [real] = await core.translateSegments([REAL.map(text => ({ text }))], { translate: enfr, reverse: fren, pieces: enfr.pieces },
+  { amp: core.AMPERSAND.en, trace: (...a) => console.log("    [" + a.join(" | ") + "]") });
+console.log(`\nCas réels (${Date.now() - t3} ms) :`);
+for (const s of real) console.log(`  ${s.text}  ->  ${s.fr}`);
+// Sorties brutes du modèle et retour en anglais, pour comprendre ce que le contrôle garde ou rejette.
+const raw = await enfr(REAL), rawBack = await fren(raw), low = await enfr(REAL.map(t => t.toLocaleLowerCase()));
+console.log("\nSorties brutes (traduction | retour | en minuscules) :");
+REAL.forEach((t, k) => console.log(`  ${t}  |  ${raw[k]}  |  ${rawBack[k]}  |  ${low[k]}`));
+const by = Object.fromEntries(real.map(s => [s.text, s.fr]));
+for (const w of ["Rate", "Defense", "August", "Context & Assumptions", "in progress"]) if (by[w] === w) fail(`« ${w} » non traduit`);
+if (by.SABIC !== "SABIC") fail("SABIC devrait être gardé");
+if (!/Framatome/.test(by["Strong Framatome impact expected"])) fail("Framatome perdu");
+if (!/Paralloy/.test(by["Paralloy/Manoir Group USA"])) fail("Paralloy perdu");
+if (!/2026/.test(by["Expected recovery of the market end of 2026"])) fail("2026 perdu");
 // De bout en bout : un PDF anglais façon présentation (titre, tableau, puces), traduit en PDF français.
 const en = await (async () => {
   const doc = await PDFLib.PDFDocument.create();
