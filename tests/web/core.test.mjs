@@ -847,6 +847,17 @@ test("traduction : noms propres déformés repris sous un nom d'emprunt", async 
   assert.ok(!calls.some(c => /Renault.*drop/.test(c)));
 });
 
+test("traduction : « & » remplacé par le mot, intitulé recopié retraduit en minuscules", async () => {
+  const dico = { "Context and Assumptions": "Contexte et hypothèses", "Ending": "Ending", "ending": "fin",
+                 "Sales Evolution": "Sales Evolution", "sales evolution": "évolution des ventes", "BASF US": "BASF US" };
+  const seen = [];
+  const engine = async list => { seen.push(...list); return list.map(t => dico[t] ?? t); };
+  const [done] = await core.translateSegments([["Context & Assumptions", "Ending", "Sales Evolution", "BASF US"].map(text => ({ text }))], engine, { amp: "and" });
+  assert.deepEqual(done.map(s => s.fr), ["Contexte et hypothèses", "Fin", "Évolution des ventes", "BASF US"]);
+  assert.ok(!seen.includes("basf us"), "un sigle n'est pas réessayé en minuscules");
+  assert.equal(core.AMPERSAND.en, "and");
+});
+
 test("lignes d'une liste aérée séparées, nombre en fin de phrase et « A » initial regroupés", async () => {
   const doc = await PDFLib.PDFDocument.create();
   const page = doc.addPage([842, 595]);

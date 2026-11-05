@@ -1200,7 +1200,7 @@ async function translateDoc() {
       const translate = await translationEngine(src, tgt);
       let back = null;
       const reverse = async list => (back ??= await translationEngine(tgt, src))(list);
-      const done = await core.translateSegments(pages, { translate, reverse }, {
+      const done = await core.translateSegments(pages, { translate, reverse }, { amp: core.AMPERSAND[src] || null,
         progress: (n, all) => say(`Traduction en ${target} : ${Math.round(n / all * 100)} % (${n} passages sur ${all})…`, "busy", n / all),
       });
       say("Mise en page du document traduit…");

@@ -2193,12 +2193,17 @@ async function fixNames(src, out, names, engine) {
   return got;
 }
 
+// « & » dans la langue de départ : les modèles le traduisent mal (« Context & Assumptions » ->
+// « Contexte & Assumptions »), le mot est envoyé à sa place.
+export const AMPERSAND = { en: "and", fr: "et", de: "und", nl: "en", es: "y", it: "e", pt: "e", ro: "și", ca: "i", sv: "och", da: "og", no: "og" };
+
 // Traduit tous les morceaux. `engine` : { translate(textes) -> textes, reverse?(textes) -> textes }.
 // Avec `reverse`, les noms propres déformés sont repris (voir fixNames) et les textes courts (noms,
-// intitulés) contrôlés par traduction inverse. `progress(fait, total)` suit l'avancement.
-// Renvoie les morceaux avec leur traduction `fr`.
-export async function translateSegments(pages, engine, { batch = 8, progress = () => {} } = {}) {
+// intitulés) contrôlés par traduction inverse. `amp` : le mot de la langue de départ pour « & ».
+// `progress(fait, total)` suit l'avancement. Renvoie les morceaux avec leur traduction `fr`.
+export async function translateSegments(pages, engine, { batch = 8, progress = () => {}, amp = null } = {}) {
   if (typeof engine === "function") engine = { translate: engine };
+  const prep = s => amp ? s.replace(/\s&\s/g, ` ${amp} `) : s;
   const wanted = new Map();
   const seen = new Map();                                 // mot -> vu en milieu de phrase / vu en minuscules
   for (const seg of pages.flat()) {
@@ -2214,14 +2219,22 @@ export async function translateSegments(pages, engine, { batch = 8, progress = (
   const todo = [...wanted.keys()];
   for (let k = 0; k < todo.length; k += batch) {
     const part = todo.slice(k, k + batch);
-    const res = await translateProtected(part, engine);
+    const res = await translateProtected(part.map(prep), engine);
     part.forEach((s, j) => wanted.set(s, res[j]));
     progress(Math.min(k + batch, todo.length), todo.length);
+  }
+  // Un intitulé court recopié tel quel (« Ending », « Sales Evolution ») : le modèle l'a pris pour
+  // un nom ; nouvel essai en minuscules, puis majuscule initiale.
+  const copied = todo.filter(s => wanted.get(s) === prep(s) && /\p{Lu}/u.test(s) && s.split(/\s+/).length <= 4 && !protectedTokens(s).length);
+  for (let k = 0; k < copied.length; k += batch) {
+    const part = copied.slice(k, k + batch);
+    const res = await translateProtected(part.map(s => prep(s).toLocaleLowerCase()), engine);
+    part.forEach((s, j) => { if (res[j] && res[j] !== prep(s).toLocaleLowerCase()) wanted.set(s, res[j].charAt(0).toLocaleUpperCase() + res[j].slice(1)); });
   }
   if (engine.reverse) {
     for (const s of todo) {
       const names = properNouns(s, known).filter(w => !hasWord(wanted.get(s), w));
-      if (names.length) wanted.set(s, await fixNames(s, wanted.get(s), names, engine));
+      if (names.length) wanted.set(s, await fixNames(prep(s), wanted.get(s), names, engine));
     }
     const short = todo.filter(s => s.split(/\s+/).length <= 4 && wanted.get(s) !== s);
     for (let k = 0; k < short.length; k += batch) {
