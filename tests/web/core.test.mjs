@@ -842,7 +842,7 @@ test("traduction : noms propres déformés repris sous un nom d'emprunt", async 
   assert.equal(done[0].fr, "Fort impact du Framatome attendu");         // « Fram-Bat » remis d'aplomb sur place
   assert.equal(done[1].fr, "Groupe Paralloy/Manoir USA");
   assert.equal(done[2].fr, "THEMIS");                                    // titre en majuscules rendu au mot près
-  assert.equal(done[3].fr, "Participation de Framatome (30%)");          // en tête de phrase, mais connu du document
+  assert.equal(done[3].fr, "Part de Framatome (30%)");                   // en tête de phrase, mais connu du document
   assert.equal(done[4].fr, "Baisse des ventes par rapport à 2025");      // mot courant : pas de nom d'emprunt
   assert.ok(!calls.some(c => /Renault.*drop/.test(c)));
 });
