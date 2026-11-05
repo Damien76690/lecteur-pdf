@@ -106,6 +106,28 @@
   .check { display:block; margin-top:10px; font-size:13px; }
   #sign-dlg { max-width:min(560px, 94vw); width:560px; }
   @media (max-width: 700px) { #list { position:fixed; left:8px; right:8px; bottom:8px; top:auto; width:auto; max-height:45vh; margin:0; z-index:20; } }
+  .rq { position:absolute; inset:0; pointer-events:none; z-index:3; }
+  .rq > div { position:absolute; box-sizing:border-box; border:2px solid var(--c); background:color-mix(in srgb, var(--c) 14%, transparent);
+              border-radius:3px; font-size:10px; line-height:1.1; color:var(--c); overflow:visible; }
+  .rq > div > span { position:absolute; left:0; bottom:100%; white-space:nowrap; background:var(--c); color:#fff; padding:1px 4px; border-radius:3px 3px 0 0; font-weight:600; }
+  .rq > div.done { border-style:dashed; background:none; }
+  .rq > div.done > span { opacity:.75; }
+  .rq > div.mine { pointer-events:auto; cursor:pointer; }
+  .rq > div.mine:hover { background:color-mix(in srgb, var(--c) 28%, transparent); }
+  .rq > div.cur { animation:rqpulse 1.2s ease-in-out infinite; }
+  @keyframes rqpulse { 50% { box-shadow:0 0 0 6px color-mix(in srgb, var(--c) 35%, transparent); } }
+  .rq > div button { position:absolute; top:-9px; right:-9px; width:18px; height:18px; min-width:0; padding:0; border-radius:50%; font-size:11px; line-height:1;
+                     background:#fff; color:#b91c1c; border:1px solid #b91c1c; pointer-events:auto; }
+  .mode-rqfield .page img { cursor:crosshair; }
+  #rq-signers, #rq-st-list { display:flex; flex-direction:column; gap:6px; margin:8px 0; max-height:45vh; overflow:auto; }
+  #rq-signers .srow { display:flex; gap:6px; align-items:center; }
+  #rq-signers .srow input { flex:1; min-width:0; width:auto; }
+  .dot-c { display:inline-block; width:12px; height:12px; border-radius:50%; background:var(--c); flex:none; }
+  #rq-st-list .sig { border:1px solid var(--border); border-left:5px solid var(--c); border-radius:8px; padding:6px 10px; font-size:13px; line-height:1.5; }
+  #rq-st-list .ok { color:#15803d; } #rq-st-list .warn { color:#b45309; } #rq-st-list .bad { color:#b91c1c; }
+  #rq-who-list label { display:flex; gap:8px; align-items:center; padding:4px 0; }
+  .rq-dlg { max-width:min(560px, 94vw); width:560px; }
+  .rq-dlg label.row input { width:62%; }
   .sel { position:absolute; border:2px dashed #dc2626; background:rgba(220,38,38,.1); pointer-events:none; }
   .mode-text .page img { cursor:text; } .mode-erase .page img { cursor:crosshair; }
   .mode-erase .page { touch-action:none; }
@@ -326,6 +348,19 @@
     </section>
     <section data-panel="signer" hidden>
       <div class="group"><div class="tools">
+        <button class="big" id="rq-prepare" title="Choisir qui doit signer ce document, puis placer leurs cases (signature, paraphe, date, texte, case à cocher)"><span class="ic">👥</span>Faire signer</button>
+        <span class="stack" id="rq-tools" hidden>
+          <label class="mini">Pour <select id="rq-signer" title="Signataire de la case à placer"></select></label>
+          <label class="mini">Case <select id="rq-type" title="Type de case à placer">
+            <option value="signature">Signature</option><option value="initials">Paraphe</option><option value="date">Date</option>
+            <option value="text">Texte</option><option value="checkbox">Case à cocher</option></select></label>
+        </span>
+        <button class="big" data-mode="rqfield" id="rq-place" hidden title="Cliquez sur la page (ou tracez un cadre) pour placer une case du signataire choisi"><span class="ic">▣</span>Placer une case</button>
+        <button class="big" id="rq-send" hidden title="Sceller le document préparé et préparer l'e-mail au premier signataire"><span class="ic">✉</span>Envoyer</button>
+        <button class="big" id="rq-sign" hidden title="Remplir et signer les cases qui vous attendent"><span class="ic">✍</span>Signer mes cases</button>
+        <button class="big" id="rq-status" hidden title="Qui a signé, qui doit encore signer, et le document est-il intact ?"><span class="ic">📋</span>Suivi</button>
+      </div><span class="gl">Faire signer à plusieurs</span></div>
+      <div class="group"><div class="tools">
         <button class="big" data-mode="sign" title="Cliquez sur la page pour poser votre signature (image)"><span class="ic">✍</span>Poser ma signature</button>
         <button class="big" data-mode="initials" title="Cliquez sur la page pour poser votre paraphe"><span class="ic">AB</span>Parapher</button>
         <button class="big" id="initials-all" title="Paraphe en bas à droite de chaque page"><span class="ic">⧉</span>Parapher toutes les pages</button>
@@ -518,10 +553,10 @@
     <label class="btn">Choisir le certificat<input id="cert-file" type="file" accept=".p12,.pfx,application/x-pkcs12" hidden></label>
     <span id="cert-name" class="hint"></span>
     <label class="row">Mot de passe du certificat <input id="cert-pass" type="password" autocomplete="off"></label>
-    <label class="row">Motif <input id="cert-reason" type="text" list="cert-reasons" value="J'approuve ce document"></label>
+    <label class="row opt">Motif <input id="cert-reason" type="text" list="cert-reasons" value="J'approuve ce document"></label>
     <datalist id="cert-reasons"><option value="J'approuve ce document"><option value="Je suis l'auteur de ce document"><option value="Lu et approuvé"><option value="Bon pour accord"></datalist>
-    <label class="row">Lieu <input id="cert-location" type="text" placeholder="facultatif"></label>
-    <label class="check"><input id="cert-visible" type="checkbox" checked> Afficher un cadre de signature sur la page</label>
+    <label class="row opt">Lieu <input id="cert-location" type="text" placeholder="facultatif"></label>
+    <label class="check opt"><input id="cert-visible" type="checkbox" checked> Afficher un cadre de signature sur la page</label>
     <div class="actions"><button value="cancel">Annuler</button><button value="ok" class="primary">Signer</button></div>
   </form>
 </dialog>
@@ -588,6 +623,56 @@
     <div id="sig-list"></div>
     <p class="hint">Mim PDF vérifie que le contenu signé n'a pas changé. Il ne vérifie pas si l'autorité qui a délivré le certificat est reconnue : en cas de doute, ouvrez aussi le document dans un autre lecteur PDF.</p>
     <div class="actions"><button value="ok">Fermer</button></div>
+  </form>
+</dialog>
+<dialog id="rq-dlg" class="rq-dlg">
+  <form method="dialog">
+    <h3>Faire signer ce document</h3>
+    <p class="hint">Mim PDF prépare un PDF à faire circuler par e-mail : chaque signataire l'ouvre avec Mim PDF (gratuit, sur son ordinateur ou sur le site), remplit ses cases puis le renvoie. Rien ne passe par un serveur.</p>
+    <label class="row">Titre <input id="rq-title" type="text" placeholder="exemple : Contrat de prestation"></label>
+    <label class="row">Votre nom <input id="rq-from-name" type="text" autocomplete="name"></label>
+    <label class="row">Votre e-mail <input id="rq-from-email" type="email" autocomplete="email" placeholder="pour recevoir le document signé"></label>
+    <strong>Signataires</strong>
+    <div id="rq-signers"></div>
+    <div class="seg"><button type="button" id="rq-add">+ Ajouter un signataire</button><button type="button" id="rq-add-me">+ Moi aussi, je signe</button></div>
+    <label class="check"><input id="rq-ordered" type="checkbox" checked> Signer dans l'ordre de la liste</label>
+    <p class="hint">Le document passe d'un signataire au suivant, chacun ajoutant sa signature à la suite : c'est ce qui garde toutes les signatures valables.</p>
+    <div class="actions"><button value="cancel">Annuler</button><button value="ok" class="primary">Placer les cases</button></div>
+  </form>
+</dialog>
+<dialog id="rq-seal-dlg" class="rq-dlg">
+  <form method="dialog">
+    <h3 id="rq-seal-title">Sceller le document</h3>
+    <p id="rq-seal-text"></p>
+    <label class="check"><input type="radio" name="rq-seal" value="seal" checked> <strong>Sceau Mim PDF</strong> (gratuit, sans certificat) : protège le document contre toute retouche, mais n'atteste pas de votre identité.</label>
+    <label class="check"><input type="radio" name="rq-seal" value="cert"> <strong>Mon certificat</strong> (.p12 / .pfx) : signature électronique à votre nom, de niveau avancé ou qualifié selon le certificat.</label>
+    <div class="actions"><button value="cancel">Annuler</button><button value="ok" class="primary" id="rq-seal-ok">Sceller</button></div>
+  </form>
+</dialog>
+<dialog id="rq-next-dlg" class="rq-dlg">
+  <form method="dialog">
+    <h3 id="rq-next-title">Étape suivante</h3>
+    <p id="rq-next-text"></p>
+    <ol class="hint" id="rq-next-steps"></ol>
+    <div class="seg"><button type="button" class="primary" id="rq-next-go">Enregistrer le PDF et préparer l'e-mail</button><button type="button" id="rq-next-copy">Copier le message</button></div>
+    <div class="actions"><button value="ok">Fermer</button></div>
+  </form>
+</dialog>
+<dialog id="rq-who-dlg" class="rq-dlg">
+  <form method="dialog">
+    <h3>Qui êtes-vous ?</h3>
+    <p class="hint" id="rq-who-hint"></p>
+    <div id="rq-who-list"></div>
+    <div class="actions"><button value="cancel">Annuler</button><button value="ok" class="primary">Commencer</button></div>
+  </form>
+</dialog>
+<dialog id="rq-status-dlg" class="rq-dlg">
+  <form method="dialog">
+    <h3 id="rq-st-title">Suivi des signatures</h3>
+    <p id="rq-st-text"></p>
+    <div id="rq-st-list"></div>
+    <p class="hint" id="rq-st-check"></p>
+    <div class="actions"><button type="button" id="rq-st-resend">Préparer l'e-mail suivant</button><button value="ok">Fermer</button></div>
   </form>
 </dialog>
 <dialog id="legal-dlg">
