@@ -73,7 +73,8 @@ const REAL = ["Rate", "Ending", "Defense", "August", "Dec.", "Sales Evolution", 
   "Integration of the Paralloy network", "Expected recovery of the market end of 2026", "Ramp up expected in H2",
   "GENERAL KPIs", "CASH-FLOW", "BANK & LOANS", "Not affected Sales : less than 17%", "6 New Salesperson for Europe, Asia and America zones"];
 const t3 = Date.now();
-const [real] = await core.translateSegments([REAL.map(text => ({ text }))], { translate: enfr, reverse: fren }, { amp: core.AMPERSAND.en });
+const [real] = await core.translateSegments([REAL.map(text => ({ text }))], { translate: enfr, reverse: fren },
+  { amp: core.AMPERSAND.en, trace: (...a) => console.log("    [" + a.join(" | ") + "]") });
 console.log(`\nCas réels (${Date.now() - t3} ms) :`);
 for (const s of real) console.log(`  ${s.text}  ->  ${s.fr}`);
 // Sorties brutes du modèle et retour en anglais, pour comprendre ce que le contrôle garde ou rejette.
@@ -81,7 +82,8 @@ const raw = await enfr(REAL), rawBack = await fren(raw), low = await enfr(REAL.m
 console.log("\nSorties brutes (traduction | retour | en minuscules) :");
 REAL.forEach((t, k) => console.log(`  ${t}  |  ${raw[k]}  |  ${rawBack[k]}  |  ${low[k]}`));
 const by = Object.fromEntries(real.map(s => [s.text, s.fr]));
-for (const w of ["Rate", "Defense", "August", "Context & Assumptions"]) if (by[w] === w) fail(`« ${w} » non traduit`);
+for (const w of ["Rate", "Defense", "August", "Context & Assumptions", "in progress"]) if (by[w] === w) fail(`« ${w} » non traduit`);
+if (by.SABIC !== "SABIC") fail("SABIC devrait être gardé");
 if (!/Framatome/.test(by["Strong Framatome impact expected"])) fail("Framatome perdu");
 if (!/Paralloy/.test(by["Paralloy/Manoir Group USA"])) fail("Paralloy perdu");
 if (!/2026/.test(by["Expected recovery of the market end of 2026"])) fail("2026 perdu");

@@ -849,13 +849,28 @@ test("traduction : noms propres déformés repris sous un nom d'emprunt", async 
 
 test("traduction : « & » remplacé par le mot, intitulé recopié retraduit en minuscules", async () => {
   const dico = { "Context and Assumptions": "Contexte et hypothèses", "Ending": "Ending", "ending": "fin",
-                 "Sales Evolution": "Sales Evolution", "sales evolution": "évolution des ventes", "BASF US": "BASF US" };
+                 "Historical view": "Historical view", "historical view": "vue historique",
+                 "Baker Hughes": "Baker Hughes", "baker hughes": "boulanger hughes", "BASF US": "BASF US" };
   const seen = [];
   const engine = async list => { seen.push(...list); return list.map(t => dico[t] ?? t); };
-  const [done] = await core.translateSegments([["Context & Assumptions", "Ending", "Sales Evolution", "BASF US"].map(text => ({ text }))], engine, { amp: "and" });
-  assert.deepEqual(done.map(s => s.fr), ["Contexte et hypothèses", "Fin", "Évolution des ventes", "BASF US"]);
-  assert.ok(!seen.includes("basf us"), "un sigle n'est pas réessayé en minuscules");
+  const [done] = await core.translateSegments([["Context & Assumptions", "Ending", "Historical view", "Baker Hughes", "BASF US"].map(text => ({ text }))], engine, { amp: "and" });
+  // Un nom en Majuscules Initiales recopié par le modèle (« Baker Hughes ») n'est pas réessayé en minuscules.
+  assert.deepEqual(done.map(s => s.fr), ["Contexte et hypothèses", "Fin", "Vue historique", "Baker Hughes", "BASF US"]);
+  assert.ok(!seen.includes("basf us") && !seen.includes("baker hughes"), "sigle et nom ne sont pas réessayés en minuscules");
   assert.equal(core.AMPERSAND.en, "and");
+});
+
+test("traduction : contrôle inverse assoupli, seconde chance en minuscules, nom déformé gardé", async () => {
+  const dico = { "Sales Evolution": "Évolution des ventes", "in progress": "en cours", "Context and Assumptions": "Contexte et acomptes",
+                 "context and assumptions": "contexte et hypothèses", "Sabic": "Sabique", "sabic": "sabique", "Energy": "Énergie",
+                 "Ending": "Fin de la procédure", "ending": "fin", "Loans and Stakholders": "Prêts et détenteurs de titres" };
+  const back = { "Évolution des ventes": "Sales trends", "en cours": "ongoing", "Contexte et acomptes": "Context and deposits",
+                 "Contexte et hypothèses": "Context and assumptions", "Sabique": "Sabica", "Énergie": "Energy", "Fin": "End",
+                 "Prêts et détenteurs de titres": "Loans and securities holders" };
+  const engine = { translate: async list => list.map(t => dico[t] ?? t), reverse: async list => list.map(t => back[t] ?? t) };
+  const texts = ["Sales Evolution", "in progress", "Context & Assumptions", "SABIC", "ENERGY", "Ending", "Loans and Stakholders"];
+  const [done] = await core.translateSegments([texts.map(text => ({ text }))], engine, { amp: "and" });
+  assert.deepEqual(done.map(s => s.fr), ["Évolution des ventes", "en cours", "Contexte et hypothèses", "SABIC", "ÉNERGIE", "Fin", "Prêts et détenteurs de titres"]);
 });
 
 test("lignes d'une liste aérée séparées, nombre en fin de phrase et « A » initial regroupés", async () => {
