@@ -946,6 +946,16 @@ const MODELS = {
 const AI_OK = "mim-resume-ia-accepte";
 let ai = null, summarizing = false;
 
+// Tous les modèles (résumé, traduction) partagent la mémoire du moteur ONNX dans la page, limitée
+// à quelques Go : avant d'en charger un gros, on libère les autres ; et quand il manque de la mémoire
+// en cours de route (« std::bad_alloc », code 6), on recommence avec des morceaux plus courts, puis
+// avec le petit modèle sur le processeur.
+const outOfMemory = e => /bad_alloc|ERROR_CODE:\s*6\b|OrtRun|out of memory|allocation failed|RangeError/i.test(e?.message || String(e));
+async function freeAi() {
+  const old = ai; ai = null;
+  if (old) try { await old.generator.dispose?.(); } catch {}
+}
+
 function showSummary(title) {
   const dlg = $("#resume-dlg");
   $("#resume-title").textContent = title;
@@ -1009,14 +1019,9 @@ async function aiResume() {
   let stopper = null;
   $("#resume-dlg").onclose = () => stopper?.interrupt();
   const t0 = Date.now();
-  try {
-    let engine;
-    try { engine = await loadAi(view, device); }
-    catch (e) {
-      if (device !== "webgpu") throw e;
-      console.error(e);                                  // carte graphique refusée : on passe au processeur
-      engine = await loadAi(view, "wasm");
-    }
+  // Un essai : chargement du modèle sur `dev`, puis résumé par morceaux de `size` caractères.
+  const attempt = async (dev, size) => {
+    const engine = await loadAi(view, dev);
     const { T, generator } = engine;
     const run = async (messages, label, max_new_tokens) => {
       if (!view.open()) throw new Error("annulé");
@@ -1029,14 +1034,36 @@ async function aiResume() {
       if (!view.open()) throw new Error("annulé");
       return (res[0].generated_text.at(-1).content || out).trim();
     };
-    const chunks = core.summaryChunks(text, engine.device === "webgpu" ? 6000 : 3000);
-    let result;
-    if (chunks.length === 1) result = await run(core.summaryMessages(name, chunks[0]), "Rédaction de la synthèse…", 700);
-    else {
-      const partials = [];
-      for (const [k, c] of chunks.entries())
-        partials.push(await run(core.summaryMessages(name, c, k + 1, chunks.length), `Lecture de la partie ${k + 1} sur ${chunks.length}…`, 350));
-      result = await run(core.finalMessages(name, partials), "Rédaction de la synthèse finale…", 700);
+    const chunks = core.summaryChunks(text, size);
+    if (chunks.length === 1) return run(core.summaryMessages(name, chunks[0]), "Rédaction de la synthèse…", 600);
+    const partials = [];
+    for (const [k, c] of chunks.entries())
+      partials.push(await run(core.summaryMessages(name, c, k + 1, chunks.length), `Lecture de la partie ${k + 1} sur ${chunks.length}…`, 300));
+    return run(core.finalMessages(name, partials), "Rédaction de la synthèse finale…", 600);
+  };
+  // Plan de repli : morceaux deux fois plus courts, puis le petit modèle sur le processeur.
+  const plan = [[device, 1], [device, 0.5]];
+  if (device === "webgpu") plan.push(["wasm", 1], ["wasm", 0.5]);
+  try {
+    await freeTranslators();
+    let result, k = 0;
+    for (;;) {
+      const [dev, scale] = plan[k];
+      try { result = await attempt(dev, Math.round((dev === "webgpu" ? 4000 : 2000) * scale)); break; }
+      catch (e) {
+        console.error(e);
+        if (e.message === "annulé" || !view.open()) throw e;
+        const oom = outOfMemory(e);
+        // Manque de mémoire : étape suivante du plan ; autre erreur sur la carte graphique : droit au processeur.
+        k = oom ? k + 1 : plan.findIndex(([d]) => d === "wasm" && d !== dev);
+        if (k < 0 || k >= plan.length) throw oom
+          ? new Error("mémoire insuffisante sur ce PC pour résumer ce document : fermez d'autres onglets ou logiciels puis réessayez, ou résumez un extrait plus court")
+          : e;
+        await freeAi();
+        view.text("");
+        view.state(oom ? "Mémoire insuffisante : nouvel essai avec des morceaux plus courts…"
+                       : "Carte graphique indisponible : passage au processeur…");
+      }
     }
     view.text(result);
     const min = Math.round((Date.now() - t0) / 60000);
@@ -1054,6 +1081,13 @@ async function aiResume() {
 const translators = {};
 const TRAD_TARGET = "mim-trad-cible";
 let translating = false;
+
+async function freeTranslators() {
+  for (const [id, p] of Object.entries(translators)) {
+    delete translators[id];
+    try { await (await p).dispose?.(); } catch {}
+  }
+}
 
 async function translator(id, label) {
   if (translators[id]) return translators[id];
@@ -1162,6 +1196,7 @@ async function translateDoc() {
       if (!core.LANGUAGES[src]) throw new Error("langue du document non reconnue : choisissez-la dans la liste");
       if (src === tgt) throw new Error(`ce document est déjà en ${core.LANGUAGES[tgt].name}`);
       const target = core.LANGUAGES[tgt].name;
+      await freeAi();                                    // le modèle de résumé libère sa mémoire pour les traducteurs
       const translate = await translationEngine(src, tgt);
       let back = null;
       const reverse = async list => (back ??= await translationEngine(tgt, src))(list);
