@@ -1068,7 +1068,7 @@ async function showRequestStatus() {
   let check = null;
   if (st.sent) {
     await loadScript(LIBS.forge);
-    try { check = core.checkRequest(forge, doc.bytes, req); } catch (e) { console.error(e); }
+    try { check = core.checkRequest(forge, doc.bytes, req); check.problems = core.revisionProblems(forge, doc.bytes, req); } catch (e) { console.error(e); }
   }
   const list = $("#rq-st-list");
   list.innerHTML = "";
@@ -1098,7 +1098,9 @@ async function showRequestStatus() {
     : !check ? ""
     : check.tampered ? "✖ Le document a été modifié après une signature : ne vous y fiez pas et redemandez l'original."
     : check.missing ? "⚠ Une étape du journal n'a pas de sceau : le document a peut-être été retouché avec un autre logiciel."
-    : "✔ Chaque étape est scellée et rien n'a été modifié depuis. Les sceaux Mim protègent le contenu mais n'attestent pas de l'identité ; un certificat, si.";
+    : check.problems?.length ? "⚠ À vérifier : " + check.problems.join(" ")
+    : "✔ Chaque étape est scellée, chaque signataire n'a rempli que ses cases, et rien n'a été modifié depuis." +
+      (st.complete ? " Le certificat d'achèvement est en dernière page." : "") + " Les sceaux Mim protègent le contenu mais n'attestent pas de l'identité ; un certificat, si.";
   const resend = $("#rq-st-resend");
   resend.hidden = !st.sent;
   resend.textContent = st.complete ? "Renvoyer à l'expéditeur" : `Préparer l'e-mail pour ${who(st.next)}`;
