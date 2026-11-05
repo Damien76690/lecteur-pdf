@@ -52,6 +52,7 @@ Les commandes sont rangées dans des onglets, comme dans Word : **Fichier**, **A
 | Protéger un PDF | **Fichier › Protéger** : mot de passe à l'ouverture (chiffrement AES 256 bits) et/ou interdire l'impression, la copie ou les modifications |
 | Signer avec un certificat (signature électronique) | **Signer › Signer avec un certificat** : choisissez votre certificat (.p12 / .pfx) et son mot de passe, puis cliquez où placer le cadre. Signature PAdES (SHA-256) lisible par Adobe Reader ; plusieurs signatures successives restent valables |
 | Savoir qui a signé un PDF | **Signer › Signatures du document** : signataire, date, motif, et si le contenu a été modifié depuis |
+| Faire signer à plusieurs (comme DocuSign, sans abonnement) | **Signer › Faire signer** : ajoutez les signataires, placez leurs cases (signature, paraphe, date, texte, case à cocher), puis **Envoyer**. Mim PDF scelle le document et prépare l'e-mail ; chaque signataire ouvre le PDF avec Mim PDF (site ou application), clique sur **Signer les cases qui m'attendent**, puis l'envoie au suivant. **Suivi** montre qui a signé, quand, et si rien n'a été retouché |
 | Convertir | **Convertir** : Word, Excel, Texte ou PDF. Dans l'Excel, les comptes annuels et liasses fiscales gardent leurs colonnes : chaque code de case et chaque montant dans sa cellule, les titres sur plusieurs lignes réunis |
 | Créer un PDF à partir de photos ou de scans | Ouvrez (ou glissez) des images PNG ou JPEG : elles forment un nouveau PDF, une page par image. Ou **Convertir › PDF depuis images** |
 | Enregistrer une page en image | **Convertir › Page en PNG / Page en JPEG** (150 ppp) |
@@ -59,6 +60,8 @@ Les commandes sont rangées dans des onglets, comme dans Word : **Fichier**, **A
 | Aplatir (fixer commentaires et champs remplis) | **Convertir › Aplatir** |
 
 **PDF signés électroniquement (Docusign, certificat…)** : un bandeau le signale à l'ouverture. Les commentaires, surlignages, tampons, signatures image et champs de formulaire remplis sont ajoutés à la suite du fichier, sans toucher aux octets signés : la signature d'origine reste valable. Les autres modifications (rotation, suppression de page, texte écrit, OCR…) l'invalident dans la copie : Mim PDF prévient avant d'enregistrer.
+
+**Faire signer à plusieurs, sans serveur** : la demande (signataires, cases, journal) voyage dans le PDF lui-même. À chaque étape (envoi, puis chaque signataire), Mim PDF ajoute une signature électronique à la suite du fichier : celle du certificat de la personne si elle en a un, sinon un « sceau Mim » créé pour l'occasion, qui protège le contenu sans attester de l'identité. Toute retouche ultérieure est détectée, dans Mim PDF comme dans Adobe Reader. Sans serveur, il n'y a ni rappel automatique, ni accusé de lecture, ni vérification par SMS ; l'e-mail est préparé dans votre messagerie, il reste à y joindre le PDF.
 
 ## Application Windows (le plus simple)
 
