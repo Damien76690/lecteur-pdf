@@ -646,6 +646,24 @@ test("morceaux pour le modèle : coupés entre les pages, jamais trop longs", ()
   assert.match(core.finalMessages("Facture", ["a", "b"])[1].content, /Partie 2 :\nb/);
 });
 
+test("résumé IA : plan de repli et nature des erreurs du moteur", () => {
+  assert.deepEqual(core.aiPlan("webgpu"), [["webgpu", 1], ["webgpu", 0.5], ["wasm", 1], ["wasm", 0.5]]);
+  assert.deepEqual(core.aiPlan("wasm"), [["wasm", 1], ["wasm", 0.5]]);
+  assert.equal(core.aiErrorKind(new Error("failed to call OrtRun(). ERROR_CODE: 6, ERROR_MESSAGE: std::bad_alloc")), "oom");
+  assert.equal(core.aiErrorKind(new RangeError("Array buffer allocation failed")), "oom");
+  assert.equal(core.aiErrorKind(new Error("table index is out of bounds")), "crash");
+  assert.equal(core.aiErrorKind(new Error("memory access out of bounds")), "crash");
+  assert.equal(core.aiErrorKind(Object.assign(new Error("unreachable"), { name: "RuntimeError" })), "crash");
+  assert.equal(core.aiErrorKind(new Error("Could not locate file")), "other");
+  const plan = core.aiPlan("webgpu");
+  assert.equal(core.nextAttempt(plan, 0, "oom"), 1);
+  assert.equal(core.nextAttempt(plan, 1, "crash"), 2);       // moteur tombé : on continue le plan, avec un moteur neuf
+  assert.equal(core.nextAttempt(plan, 0, "other"), 2);       // carte graphique en panne : droit au processeur
+  assert.equal(core.nextAttempt(plan, 2, "other"), -1);      // déjà sur le processeur : on abandonne
+  assert.equal(core.nextAttempt(plan, 3, "oom"), -1);
+  assert.equal(core.nextAttempt(core.aiPlan("wasm"), 0, "crash"), 1);
+});
+
 // ------------------------------------------------------------ traduction
 
 test("langue détectée : anglais, allemand, espagnol, chinois, français et autres", () => {

@@ -1774,6 +1774,34 @@ export function finalMessages(name, partials) {
           { role: "user", content: `Voici les résumés successifs des parties du document « ${name} ».\n\n${all}\n\n${FINAL}` }];
 }
 
+// Résumé IA : le modèle tourne dans un « worker » à part (web/ia.js), avec sa propre mémoire. Quand
+// il échoue, la page le jette et en relance un neuf selon ce plan : d'abord des morceaux deux fois
+// plus courts, puis le petit modèle sur le processeur. Un moteur WebAssembly tombé (« table index is
+// out of bounds », « memory access out of bounds »…) ne doit jamais être réutilisé ni « disposé » :
+// avec Transformers.js 4, dispose() détruit la carte graphique partagée et tout ce qui suit plante.
+export function aiPlan(device) {
+  const plan = [[device, 1], [device, 0.5]];
+  if (device === "webgpu") plan.push(["wasm", 1], ["wasm", 0.5]);
+  return plan;
+}
+
+// Nature d'une erreur du moteur : « oom » plus de mémoire, « crash » moteur tombé, « other » autre
+// chose (modèle introuvable, carte graphique refusée…).
+export function aiErrorKind(e) {
+  const m = e?.message || String(e);
+  if (/bad_alloc|ERROR_CODE:\s*6\b|out of memory|allocation failed|RangeError|OrtRun/i.test(m)) return "oom";
+  if (e?.name === "RuntimeError" || /out of bounds|unreachable|null function|memory access|table index|Aborted\(|RuntimeError|device lost|detached/i.test(m)) return "crash";
+  return "other";
+}
+
+// Étape suivante du plan après une erreur à l'étape k, ou -1 quand il n'y a plus rien à tenter :
+// manque de mémoire ou moteur tombé → étape suivante ; autre erreur sur la carte graphique → droit
+// au processeur ; autre erreur sur le processeur → on abandonne.
+export function nextAttempt(plan, k, kind) {
+  const next = kind === "other" ? plan.findIndex(([d], i) => i > k && d === "wasm" && d !== plan[k][0]) : k + 1;
+  return next >= 0 && next < plan.length ? next : -1;
+}
+
 // ------------------------------------------------------------ traduction
 
 // Langues proposées : code ISO, nom, code NLLB-200 et écriture. Les modèles tournent sur ce PC.
