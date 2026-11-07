@@ -503,11 +503,16 @@ export function readCertificate(forge, p12, password) {
   // Le certificat du signataire est celui dont la clé publique correspond à la clé privée.
   const cert = certs.find(c => c.publicKey.n?.equals?.(keyBag.key.n)) || certs[0];
   if (!cert) throw new Error("aucun certificat dans ce fichier");
-  const field = (c, name) => c.subject.getField(name)?.value || "";
+  const field = (c, name) => utf8Text(forge, c.subject.getField(name)?.value || "");
   return { key: keyBag.key, cert, chain: certs.filter(c => c !== cert),
     name: field(cert, "CN") || field(cert, "O"), email: field(cert, "E") || "",
-    issuer: cert.issuer.getField("CN")?.value || cert.issuer.getField("O")?.value || "",
+    issuer: utf8Text(forge, cert.issuer.getField("CN")?.value || cert.issuer.getField("O")?.value || ""),
     from: cert.validity.notBefore, to: cert.validity.notAfter };
+}
+
+// Les noms des certificats sont souvent en UTF-8 (« Léa ») : node-forge les rend octet par octet.
+function utf8Text(forge, s) {
+  try { return forge.util.decodeUtf8(s); } catch { return s; }
 }
 
 const pdfDate = d => {
@@ -620,13 +625,13 @@ export function signatures(forge, bytes) {
       if (!obj.isDictionary() || !obj.get("ByteRange").isArray() || !obj.get("Contents").isString()) continue;
       const range = [0, 1, 2, 3].map(k => obj.get("ByteRange").get(k).asNumber());
       const sig = { name: str(obj.get("Name")), reason: str(obj.get("Reason")), location: str(obj.get("Location")),
-        date: pdfDateToIso(str(obj.get("M"))), covers: range[2] + range[3] === bytes.length, intact: null, issuer: "" };
+        date: pdfDateToIso(str(obj.get("M"))), covers: range[2] + range[3] === bytes.length, end: range[2] + range[3], intact: null, issuer: "" };
       try {
         const asn = forge.asn1.fromDer(binary(obj.get("Contents").asByteString()), { strict: false, parseAllBytes: false });
         try {
           const cert = forge.pkcs7.messageFromAsn1(asn).certificates?.[0];
-          sig.name ||= cert?.subject.getField("CN")?.value || "";
-          sig.issuer = cert?.issuer.getField("CN")?.value || cert?.issuer.getField("O")?.value || "";
+          sig.name ||= utf8Text(forge, cert?.subject.getField("CN")?.value || "");
+          sig.issuer = utf8Text(forge, cert?.issuer.getField("CN")?.value || cert?.issuer.getField("O")?.value || "");
         } catch { /* certificat non RSA : nom lu dans le PDF */ }
         const digest = findAttr(forge, asn, forge.pki.oids.messageDigest);
         const md = hashes[findOid(forge, asn, oid => oid in hashes)];
@@ -2407,4 +2412,393 @@ export async function applyTranslation(bytes, pages, { scanned = [], draw = null
       }
     }
   })).bytes;
+}
+
+// ------------------------------------------------------------ faire signer à plusieurs (sans serveur)
+// La « demande de signature » voyage dans le PDF lui-même : liste des signataires, cases à remplir
+// par chacun et journal (qui a signé, quand, empreinte du document). Elle est rangée dans le
+// catalogue du PDF (/MimSignature, du JSON) et chaque étape est scellée par une signature électronique
+// (certificat du signataire, ou sceau Mim créé pour l'occasion) : toute retouche ultérieure du
+// contenu déjà signé se voit. Rien ne passe par un serveur : le PDF circule par e-mail.
+
+export const FIELD_TYPES = {
+  signature: { label: "Signature", w: 160, h: 50 },
+  initials: { label: "Paraphe", w: 60, h: 30 },
+  date: { label: "Date", w: 90, h: 18 },
+  text: { label: "Texte", w: 170, h: 18 },
+  checkbox: { label: "Case à cocher", w: 14, h: 14 },
+};
+export const SIGNER_COLORS = ["#2563eb", "#db2777", "#059669", "#d97706", "#7c3aed", "#0891b2", "#dc2626", "#4d7c0f"];
+const REQUEST_KEY = "MimSignature";
+const shortId = () => Math.random().toString(36).slice(2, 8);
+
+// Nouvelle demande : { version, id, title, sender: { name, email }, ordered, signers: [{ id, name, email, color }],
+//   fields: [{ id, signer, type, page, rect, label, required, done? }], events: [{ type, at, … }] }.
+export function newRequest({ title = "", sender = {}, ordered = true, signers = [] } = {}) {
+  const req = { version: 1, id: shortId(), title, sender: { name: sender.name || "", email: sender.email || "" }, ordered,
+    signers: [], fields: [], events: [] };
+  signers.forEach(s => addSigner(req, s));
+  return req;
+}
+
+export function addSigner(req, { name = "", email = "" }) {
+  const s = { id: shortId(), name: name.trim(), email: email.trim(), color: SIGNER_COLORS[req.signers.length % SIGNER_COLORS.length] };
+  req.signers.push(s);
+  return s;
+}
+
+// Case `type` pour le signataire `signer`, centrée sur (x, y) ou couvrant `rect` [x0, y0, x1, y1]
+// (points tels qu'affichés), gardée dans la page de taille { w, h }.
+export function addRequestField(req, { signer, type, page, at, rect, size, label = "", required = true }) {
+  const t = FIELD_TYPES[type];
+  if (!t) throw new Error("type de case inconnu : " + type);
+  if (!req.signers.some(s => s.id === signer)) throw new Error("signataire inconnu");
+  let r = rect ? box(rect.slice(0, 2), rect.slice(2)) : [at[0] - t.w / 2, at[1] - t.h / 2, at[0] + t.w / 2, at[1] + t.h / 2];
+  if (size) {
+    const w = Math.min(r[2] - r[0], size.w), h = Math.min(r[3] - r[1], size.h);
+    const x = Math.min(Math.max(r[0], 0), size.w - w), y = Math.min(Math.max(r[1], 0), size.h - h);
+    r = [x, y, x + w, y + h];
+  }
+  const f = { id: shortId(), signer, type, page, rect: r.map(n => Math.round(n * 10) / 10), label: label.trim(), required: type !== "checkbox" && !!required };
+  req.fields.push(f);
+  return f;
+}
+
+export function removeRequestField(req, id) {
+  req.fields = req.fields.filter(f => f.id !== id);
+}
+
+// Demande rangée dans le PDF, ou null.
+export function readRequest(bytes) {
+  return withMu(bytes, doc => {
+    const o = doc.getTrailer().get("Root").get(REQUEST_KEY);
+    if (!o.isStream()) return null;
+    try {
+      const req = JSON.parse(new TextDecoder().decode(o.readStream().asUint8Array()));
+      return req?.version === 1 && Array.isArray(req.signers) ? req : null;
+    } catch { return null; }
+  });
+}
+
+// Range la demande dans le PDF (enregistrement incrémental si le PDF est déjà signé ou scellé).
+// `req` null : retire la demande.
+export function writeRequest(bytes, req) {
+  return withMu(bytes, doc => {
+    const root = doc.getTrailer().get("Root"), old = root.get(REQUEST_KEY);
+    const data = new TextEncoder().encode(JSON.stringify(req));
+    if (!req) root.delete(REQUEST_KEY);
+    else if (old.isStream()) old.writeStream(data);
+    else root.put(REQUEST_KEY, doc.addStream(data, {}));
+    return saveMu(doc, bytes);
+  });
+}
+
+// Empreinte SHA-256 (hexadécimal) des octets : permet de prouver quel fichier a été signé.
+export async function sha256(bytes) {
+  const h = await globalThis.crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(h)].map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+const signedEvent = (req, signerId) => req.events.find(e => e.type === "signed" && e.signer === signerId);
+
+// Où en est la demande : { sent, total, doneCount, signers: [{ …, done, at, fields }], next, complete, text }.
+export function requestStatus(req) {
+  const signers = req.signers.map(s => {
+    const ev = signedEvent(req, s.id);
+    return { ...s, done: !!ev, at: ev?.at || "", method: ev?.method || "", fields: req.fields.filter(f => f.signer === s.id).length };
+  });
+  const doneCount = signers.filter(s => s.done).length, total = signers.length;
+  const next = signers.find(s => !s.done) || null;
+  const sent = req.events.some(e => e.type === "sent");
+  const complete = sent && total > 0 && doneCount === total;
+  const text = !sent ? "Demande en préparation (pas encore envoyée)."
+    : complete ? `Terminé : ${total === 1 ? "le signataire a signé" : `les ${total} signataires ont signé`}.`
+    : (doneCount ? `${doneCount} sur ${total} ${doneCount > 1 ? "ont" : "a"} signé.` : `Personne n'a encore signé (0 sur ${total}).`) +
+      (next ? ` Prochain : ${next.name || next.email}.` : "");
+  return { sent, total, doneCount, signers, next, complete, text };
+}
+
+// Le signataire `signerId` peut-il signer maintenant ? { ok, reason }.
+export function canSign(req, signerId) {
+  const st = requestStatus(req), s = st.signers.find(x => x.id === signerId);
+  if (!st.sent) return { ok: false, reason: "la demande n'a pas encore été envoyée" };
+  if (!s) return { ok: false, reason: "signataire inconnu" };
+  if (s.done) return { ok: false, reason: `${s.name || s.email} a déjà signé` };
+  if (req.ordered && st.next?.id !== signerId) return { ok: false, reason: `c'est d'abord à ${st.next.name || st.next.email} de signer` };
+  return { ok: true, reason: "" };
+}
+
+// Avant l'envoi : au moins un signataire, chacun nommé et ayant au moins une case.
+export function requestProblems(req) {
+  const out = [];
+  if (!req.signers.length) out.push("ajoutez au moins un signataire");
+  for (const s of req.signers) {
+    if (!s.name) out.push("chaque signataire doit avoir un nom");
+    if (!req.fields.some(f => f.signer === s.id)) out.push(`placez au moins une case pour ${s.name || "chaque signataire"}`);
+  }
+  return [...new Set(out)];
+}
+
+// Remplit une case : `value` = { png, w, h } pour une signature ou un paraphe, texte pour une case
+// texte, vrai / faux pour une case à cocher ; une date se remplit seule (date du jour, `now`).
+export function fillRequestField(bytes, req, fieldId, value, now = new Date()) {
+  const r = structuredClone(req), f = r.fields.find(x => x.id === fieldId);
+  if (!f) throw new Error("case introuvable");
+  const [x0, y0, x1, y1] = f.rect, w = x1 - x0, h = y1 - y0, tag = `Mim:${r.id}:${f.id}`;
+  const finish = out => { f.done = { at: now.toISOString() }; return { bytes: writeRequest(out, r), request: r }; };
+  let spec;
+  if (f.type === "signature" || f.type === "initials") {
+    if (!value?.png) throw new Error("signature vide");
+    const k = Math.min(w / value.w, h / value.h), sw = value.w * k, sh = value.h * k;
+    const x = x0 + (w - sw) / 2, y = y0 + (h - sh) / 2;
+    spec = { kind: "image", rect: [x, y, x + sw, y + sh], png: value.png, text: f.type === "signature" ? "Signature" : "Paraphe" };
+  } else if (f.type === "checkbox") {
+    if (!value) return finish(bytes);
+    spec = { kind: "textbox", rect: [x0, y0 - h * 0.15, x1 + h * 0.3, y1], text: "X", size: Math.max(6, h * 0.85) };
+  } else {
+    const text = f.type === "date" ? now.toLocaleDateString("fr-FR") : String(value ?? "").trim();
+    if (!text && f.required) throw new Error(`la case « ${f.label || FIELD_TYPES[f.type].label} » est obligatoire`);
+    if (!text) return finish(bytes);
+    const size = Math.max(5, Math.min(11, h * 0.7, (w - 6) / (text.length * 0.5)));
+    spec = { kind: "textbox", rect: [x0, y0, Math.max(x1, x0 + text.length * size * 0.55 + 8), y1], text, size };
+  }
+  const out = withMu(annotate(bytes, f.page, { ...spec, color: "#0b1f6b" }), doc => {   // case marquée comme remplie par la demande
+    const page = doc.loadPage(f.page);
+    try {
+      const a = page.getAnnotations().at(-1);
+      a.setSubject(tag);
+      if (a.getType() === "FreeText") a.setBorderWidth(0);
+      a.update();
+    } finally { page.destroy(); }
+    return saveMu(doc, bytes);
+  });
+  return finish(out);
+}
+
+// Cases du signataire encore à remplir (les cases facultatives non remplies comptent comme vues).
+export const pendingFields = (req, signerId) => req.fields.filter(f => f.signer === signerId && !f.done);
+
+// Sceau Mim : identité créée pour l'occasion quand le signataire n'a pas de certificat. Elle ne
+// prouve pas qui a signé (personne ne l'a vérifiée), mais elle scelle le document : toute retouche
+// du contenu déjà signé est détectée.
+export const SEAL_ISSUER = "Sceau Mim PDF (sans certificat)";
+export function sealIdentity(forge, { name, email = "" }, { bits = 2048, now = new Date() } = {}) {
+  const keys = forge.pki.rsa.generateKeyPair({ bits, e: 0x10001 });
+  const cert = forge.pki.createCertificate();
+  cert.publicKey = keys.publicKey;
+  cert.serialNumber = "01" + forge.util.bytesToHex(forge.random.getBytesSync(8));
+  cert.validity.notBefore = new Date(now.getTime() - 60000);
+  cert.validity.notAfter = new Date(now.getTime() + 5 * 365 * 864e5);
+  const utf8 = forge.asn1.Type.UTF8;   // noms accentués (Léa, Hélène…) lisibles par tous les lecteurs PDF
+  const subject = [{ name: "commonName", value: name || email || "Signataire", valueTagClass: utf8 },
+                   ...(email ? [{ name: "emailAddress", value: email }] : [])];
+  cert.setSubject(subject);
+  cert.setIssuer([{ name: "commonName", value: SEAL_ISSUER, valueTagClass: utf8 }]);
+  cert.sign(keys.privateKey, forge.md.sha256.create());
+  return { key: keys.privateKey, cert, chain: [], name: name || email, email, issuer: SEAL_ISSUER, from: cert.validity.notBefore, to: cert.validity.notAfter };
+}
+
+const sealReason = (req, what) => `Mim PDF, demande ${req.id} : ${what}`;
+
+// Envoi : fige le document préparé (empreinte d'origine, événement « envoyée ») et le scelle au nom
+// de l'expéditeur. `id` : certificat de l'expéditeur, sinon un sceau Mim est créé.
+export async function sendRequest(forge, bytes, req, { id = null, now = new Date(), bits } = {}) {
+  const problems = requestProblems(req);
+  if (problems.length) throw new Error(problems.join(" ; "));
+  const r = structuredClone(req);
+  r.events = r.events.filter(e => e.type !== "sent");
+  r.events.push({ type: "sent", at: now.toISOString(), by: r.sender.name || r.sender.email, hash: await sha256(bytes) });
+  const out = writeRequest(bytes, r);
+  const seal = id || sealIdentity(forge, r.sender, { bits, now });
+  return { bytes: signPdf(forge, out, seal, { reason: sealReason(r, "envoyée pour signature"), date: now }), request: r };
+}
+
+// Fin de la signature d'un signataire : toutes ses cases obligatoires doivent être remplies ;
+// le journal reçoit l'événement « a signé » (empreinte du document reçu) puis le tout est scellé.
+export async function completeSigner(forge, bytes, req, signerId, { id = null, received, now = new Date(), bits } = {}) {
+  const check = canSign(req, signerId);
+  if (!check.ok) throw new Error(check.reason);
+  const left = req.fields.filter(f => f.signer === signerId && f.required && !f.done);
+  if (left.length) throw new Error(`il reste ${left.length} case${left.length > 1 ? "s" : ""} à remplir`);
+  const s = req.signers.find(x => x.id === signerId);
+  const r = structuredClone(req);
+  for (const f of r.fields) if (f.signer === signerId && !f.done) f.done = { at: now.toISOString(), skipped: true };
+  r.events.push({ type: "signed", signer: signerId, name: s.name, email: s.email, at: now.toISOString(), method: id ? "certificat" : "sceau",
+    certificate: id ? { name: id.name, issuer: id.issuer } : null, received: received || "" });
+  const done = requestStatus(r).complete;
+  let out = writeRequest(bytes, r);
+  if (done) out = addCompletionPage(out, r);     // dernière signature : certificat d'achèvement, scellé avec elle
+  const seal = id || sealIdentity(forge, s, { bits, now });
+  return { bytes: signPdf(forge, out, seal, { reason: sealReason(r, `${s.name || s.email} a signé${done ? " (dernière signature)" : ""}`), date: now }), request: r };
+}
+
+// Contrôle d'une demande : chaque étape annoncée par le journal a-t-elle son sceau, intact ?
+// [{ signer, name, at, method, sealed, intact }] ; et `tampered` si un sceau ne correspond plus au contenu.
+export function checkRequest(forge, bytes, req) {
+  const sigs = signatures(forge, bytes).filter(s => s.reason.startsWith(`Mim PDF, demande ${req.id} :`));
+  const steps = req.events.filter(e => e.type === "sent" || e.type === "signed").map(e => {
+    const s = req.signers.find(x => x.id === e.signer);
+    const name = e.type === "sent" ? (req.sender.name || req.sender.email) : (s?.name || s?.email || "?");
+    const sig = sigs.find(g => e.type === "sent" ? /envoyée pour signature/.test(g.reason) : g.reason.includes(`: ${name} a signé`));
+    return { type: e.type, signer: e.signer || null, name, at: e.at, method: e.method || "", sealed: !!sig, intact: sig ? sig.intact : null,
+      issuer: sig?.issuer || "" };
+  });
+  return { steps, tampered: steps.some(s => s.intact === false), missing: steps.some(s => !s.sealed) };
+}
+
+// Message d'accompagnement (e-mail) pour le destinataire `to` ({ name, email }).
+export function requestEmail(req, to, { fileName, site = "https://lecteur-pdf-libre.vercel.app", toSender = false } = {}) {
+  const st = requestStatus(req), from = req.sender.name || req.sender.email;
+  const title = req.title || fileName;
+  if (toSender) {
+    return { to: req.sender.email, subject: `Signé : ${title}`,
+      body: `Bonjour ${req.sender.name || ""},\n\nVoici le document « ${title} » signé par ${st.signers.filter(s => s.done).map(s => s.name).join(", ")} (${st.text})\n\n` +
+        `Le fichier joint (${fileName}) contient les signatures et le journal de la demande. Ouvrez-le avec Mim PDF puis Signer › Suivi des signatures pour le vérifier.\n\nCordialement,\n` };
+  }
+  const mine = req.fields.filter(f => f.signer === to.id).length;
+  return { to: to.email, subject: `Document à signer : ${title}`,
+    body: `Bonjour ${to.name || ""},\n\n${from} vous demande de signer le document « ${title} » (${mine} case${mine > 1 ? "s" : ""} à remplir). Le fichier PDF est joint à ce message (${fileName}).\n\n` +
+      `Pour signer, gratuitement et sans créer de compte :\n` +
+      `1. Enregistrez la pièce jointe sur votre ordinateur.\n` +
+      `2. Ouvrez-la avec Mim PDF : ${site} (le document reste sur votre ordinateur, rien n'est envoyé sur Internet) ou l'application Windows Mim PDF.\n` +
+      `3. Cliquez sur « Signer les cases qui m'attendent », suivez les étapes, puis renvoyez le PDF signé par e-mail comme Mim PDF vous le proposera.\n\nMerci,\n${from}\n` };
+}
+
+export const mailtoUrl = ({ to = "", subject = "", body = "" }) =>
+  `mailto:${encodeURIComponent(to).replace(/%40/g, "@")}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body.replace(/\n/g, "\r\n"))}`;
+
+// ------------------------------------------------------------ preuve de la demande : certificat d'achèvement et contrôle des retouches
+
+const frDate = iso => { const d = new Date(iso); return isNaN(d) ? "?" : d.toLocaleString("fr-FR", { dateStyle: "long", timeStyle: "medium" }); };
+
+// Coupe un texte en lignes d'au plus `max` caractères (sans couper les mots, sauf trop longs).
+function wrapLines(text, max) {
+  const out = [];
+  for (const para of String(text).split("\n")) {
+    let line = "";
+    for (const word of para.split(/\s+/).filter(Boolean)) {
+      if (line && (line + " " + word).length > max) { out.push(line); line = ""; }
+      line = line ? line + " " + word : word;
+      while (line.length > max) { out.push(line.slice(0, max)); line = line.slice(max); }
+    }
+    out.push(line);
+  }
+  return out;
+}
+
+// Lignes du certificat d'achèvement : [texte, taille, gras, couleur grise ?].
+export function completionLines(req, last = null) {
+  const sent = req.events.find(e => e.type === "sent");
+  const L = [["Certificat d'achèvement de la signature", 17, true], ["", 6]];
+  const kv = (k, v) => L.push([`${k} : ${v}`, 10]);
+  kv("Document", req.title || "sans titre");
+  kv("Demande n°", req.id);
+  kv("Envoyée par", `${req.sender.name}${req.sender.email ? ` <${req.sender.email}>` : ""}, le ${frDate(sent?.at)}`);
+  L.push(["Empreinte SHA-256 du document envoyé (avant sa préparation) :", 10]);
+  L.push([sent?.hash || "?", 8, false, true]);
+  L.push(["", 6], ["Signataires", 13, true]);
+  req.signers.forEach((s, k) => {
+    const ev = req.events.find(e => e.type === "signed" && e.signer === s.id) || (last?.signer === s.id ? last : null);
+    L.push([`${k + 1}. ${s.name}${s.email ? ` <${s.email}>` : ""}`, 11, true]);
+    if (!ev) { L.push(["   n'a pas signé", 10]); return; }
+    const fields = req.fields.filter(f => f.signer === s.id);
+    L.push([`   a signé le ${frDate(ev.at)}, ${fields.length} case${fields.length > 1 ? "s" : ""} remplie${fields.length > 1 ? "s" : ""}`, 10]);
+    L.push([ev.method === "certificat" ? `   avec son certificat : ${ev.certificate?.name || "?"} (délivré par ${ev.certificate?.issuer || "?"})`
+                                        : "   avec un sceau Mim PDF (le contenu est protégé ; l'identité n'est pas attestée par un certificat)", 10]);
+    if (ev.received) { L.push(["   empreinte SHA-256 du document reçu :", 9]); L.push([`   ${ev.received}`, 8, false, true]); }
+  });
+  L.push(["", 8], ["Comment vérifier", 13, true]);
+  for (const t of ["Chaque étape (envoi, puis chaque signataire) est une signature électronique ajoutée à la suite du fichier : toute retouche ultérieure du contenu signé est détectée.",
+                   "Dans Mim PDF : onglet Signer, bouton Suivi. Dans Adobe Acrobat Reader : panneau Signatures (les sceaux Mim y apparaissent comme des signatures dont l'émetteur n'est pas reconnu, ce qui est normal).",
+                   "Un sceau Mim prouve que le document n'a pas changé depuis l'étape, pas qui l'a apposé. Pour une identité attestée, le signataire utilise un certificat."])
+    wrapLines(t, 95).forEach(l => L.push([l, 9, false, true]));
+  L.push(["", 8], [`Certificat établi par Mim PDF (logiciel libre, AGPL-3.0) le ${frDate(last?.at || new Date().toISOString())}.`, 8, false, true]);
+  return L;
+}
+
+// Ajoute le certificat d'achèvement en dernière page (enregistrement incrémental).
+export function addCompletionPage(bytes, req, last = null) {
+  return withMu(bytes, doc => {
+    const [w, h] = [595, 842];
+    let y = h - 60, ops = "";
+    ops += "q 0.15 0.39 0.92 RG 2 w 40 40 515 762 re S Q ";
+    for (const [t, size, bold, grey] of completionLines(req, last)) {
+      y -= size * 1.45;
+      if (y < 50) break;
+      if (!t) continue;
+      ops += `BT ${grey ? "0.35 0.38 0.45 rg" : "0.07 0.09 0.15 rg"} /${bold ? "HeB" : "He"} ${size} Tf 56 ${y.toFixed(1)} Td (${latin(t)}) Tj ET `;
+    }
+    const font = name => doc.addSimpleFont(new mupdf.Font(name), "Latin");
+    const res = doc.addObject({ Font: { He: font("Helvetica"), HeB: font("Helvetica-Bold") } });
+    doc.insertPage(-1, doc.addPage([0, 0, w, h], 0, res, ops));
+    return doc.saveToBuffer("incremental").asUint8Array().slice();
+  });
+}
+
+// Empreinte rapide (FNV-1a) d'une suite d'octets, pour comparer deux versions d'une page.
+function fnv(u8, h = 0x811c9dc5) {
+  for (let i = 0; i < u8.length; i++) { h ^= u8[i]; h = Math.imul(h, 0x01000193) >>> 0; }
+  return h;
+}
+
+// État d'une version du document : contenu de chaque page et annotations (avec leur étiquette Mim).
+function revisionState(bytes) {
+  return withMu(bytes, doc => {
+    const pages = [];
+    for (let i = 0; i < doc.countPages(); i++) {
+      const c = doc.findPage(i).get("Contents");
+      let h = 0x811c9dc5;
+      const streams = c.isArray() ? Array.from({ length: c.length }, (_, k) => c.get(k)) : [c];
+      for (const s of streams) { try { if (s.isStream()) h = fnv(s.readStream().asUint8Array(), h); } catch {} }
+      const annots = [];
+      const page = doc.loadPage(i);
+      try {
+        for (const a of page.getAnnotations()) {
+          if (a.getType() === "Widget") continue;
+          const b = a.getBounds().map(n => Math.round(n));
+          annots.push({ key: `${i}|${a.getType()}|${a.hasSubject() ? a.getSubject() : ""}|${b.join(",")}|${a.getContents() || ""}`,
+                        subject: a.hasSubject() ? a.getSubject() : "", type: a.getType() });
+        }
+      } finally { page.destroy(); }
+      pages.push({ content: h, annots });
+    }
+    return pages;
+  });
+}
+
+// Contrôle des retouches entre deux sceaux : chaque signataire ne doit avoir ajouté que ses propres cases
+// (et le dernier, la page du certificat d'achèvement). Renvoie la liste des anomalies, en clair.
+export function revisionProblems(forge, bytes, req) {
+  const tag = `Mim PDF, demande ${req.id} :`;
+  const sigs = signatures(forge, bytes).filter(s => s.reason.startsWith(tag) && s.end).sort((a, b) => a.end - b.end);
+  const problems = [];
+  if (!sigs.length) return problems;
+  const states = sigs.map(s => revisionState(bytes.subarray(0, s.end)));
+  for (let k = 1; k < sigs.length; k++) {
+    const before = states[k - 1], after = states[k], reason = sigs[k].reason;
+    const name = reason.slice(tag.length).replace(/ a signé.*$/, "").trim();
+    const s = req.signers.find(x => (x.name || x.email) === name);
+    const allowed = new Set(req.fields.filter(f => f.signer === s?.id).map(f => `Mim:${req.id}:${f.id}`));
+    const last = k === sigs.length - 1 && /dernière signature/.test(reason);
+    if (after.length !== before.length + (last ? 1 : 0))
+      problems.push(`${name} : le nombre de pages a changé (${before.length} → ${after.length}).`);
+    before.forEach((p, i) => {
+      if (!after[i]) return;
+      if (after[i].content !== p.content) problems.push(`${name} : le contenu de la page ${i + 1} a été modifié.`);
+      const old = new Set(p.annots.map(a => a.key)), now = new Set(after[i].annots.map(a => a.key));
+      for (const a of p.annots) if (!now.has(a.key)) problems.push(`${name} : un élément de la page ${i + 1} a été retiré ou déplacé.`);
+      for (const a of after[i].annots) if (!old.has(a.key) && !allowed.has(a.subject))
+        problems.push(`${name} : un ajout en page ${i + 1} ne correspond à aucune de ses cases (${a.type === "Stamp" ? "image" : a.type === "FreeText" ? "texte" : "commentaire"}).`);
+    });
+  }
+  // Ajouts faits après le dernier sceau (commentaires d'un lecteur, par exemple) : signalés, sans gravité.
+  const end = sigs.at(-1).end;
+  if (end < bytes.length) {
+    const fin = revisionState(bytes), lastState = states.at(-1);
+    const added = fin.reduce((n, p, i) => n + p.annots.filter(a => !new Set((lastState[i]?.annots || []).map(x => x.key)).has(a.key)).length, 0);
+    const changed = fin.some((p, i) => lastState[i] && p.content !== lastState[i].content) || fin.length !== lastState.length;
+    if (changed) problems.push("Le document a été modifié après la dernière signature.");
+    else if (added) problems.push(`${added} commentaire${added > 1 ? "s" : ""} ajouté${added > 1 ? "s" : ""} après la dernière signature (le contenu signé n'a pas changé).`);
+  }
+  return [...new Set(problems)];
 }

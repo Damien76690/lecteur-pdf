@@ -899,3 +899,130 @@ test("lignes d'une liste aérée séparées, nombre en fin de phrase et « A » 
   const segs = core.translationSegments(await doc.save())[0];
   assert.equal(segs[4].lines.length, 2);
 });
+
+// ------------------------------------------------------------ faire signer à plusieurs
+
+const tinyPng = () => {   // signature dessinée : une image PNG de 4 × 2 pixels
+  const b64 = "iVBORw0KGgoAAAANSUhEUgAAAAQAAAACCAYAAAB/qH1jAAAAEUlEQVR4nGNgYGD4z8DAwMAAAA0AAWo9ZFkAAAAASUVORK5CYII=";
+  return { png: Uint8Array.from(Buffer.from(b64, "base64")), w: 4, h: 2 };
+};
+
+test("demande de signature : préparer, envoyer, deux signataires dans l'ordre, journal scellé", async () => {
+  const page = core.pageInfo(facture())[0];
+  let req = core.newRequest({ title: "Contrat", sender: { name: "Damien", email: "damien@exemple.fr" },
+    signers: [{ name: "Paul Martin", email: "paul@exemple.fr" }, { name: "Léa Petit", email: "lea@exemple.fr" }] });
+  const [paul, lea] = req.signers;
+  assert.notEqual(paul.color, lea.color);
+  assert.deepEqual(core.requestProblems(req), ["placez au moins une case pour Paul Martin", "placez au moins une case pour Léa Petit"]);
+  const sigPaul = core.addRequestField(req, { signer: paul.id, type: "signature", page: 0, at: [150, 650], size: page });
+  core.addRequestField(req, { signer: paul.id, type: "date", page: 0, at: [150, 700], size: page });
+  core.addRequestField(req, { signer: lea.id, type: "text", page: 0, at: [400, 650], size: page, label: "Fonction" });
+  core.addRequestField(req, { signer: lea.id, type: "checkbox", page: 0, at: [400, 700], size: page, label: "J'accepte" });
+  const sigLea = core.addRequestField(req, { signer: lea.id, type: "initials", page: 0, at: [590, 835], size: page });
+  assert.ok(sigLea.rect[2] <= page.w && sigLea.rect[3] <= page.h, "case gardée dans la page");
+  assert.deepEqual(core.requestProblems(req), []);
+
+  // La demande voyage dans le PDF.
+  let bytes = core.writeRequest(facture(), req);
+  assert.deepEqual(core.readRequest(bytes), req);
+  assert.equal(core.readRequest(facture()), null);
+  assert.equal(core.requestStatus(req).text, "Demande en préparation (pas encore envoyée).");
+  assert.equal(core.canSign(req, paul.id).ok, false);
+
+  // Envoi : sceau de l'expéditeur.
+  ({ bytes, request: req } = await core.sendRequest(forge, bytes, req, { bits: 1024 }));
+  assert.equal(core.readRequest(bytes).events[0].type, "sent");
+  assert.match(req.events[0].hash, /^[0-9a-f]{64}$/);
+  assert.ok(core.isSigned(bytes));
+  assert.equal(core.requestStatus(req).text, "Personne n'a encore signé (0 sur 2). Prochain : Paul Martin.");
+  assert.match(core.canSign(req, lea.id).reason, /d'abord à Paul Martin/);
+
+  // Paul remplit ses cases (la date se remplit seule) puis termine.
+  const sent = bytes;
+  await assert.rejects(core.completeSigner(forge, bytes, req, paul.id, { bits: 1024 }), /il reste 2 cases/);
+  ({ bytes, request: req } = core.fillRequestField(bytes, req, sigPaul.id, tinyPng()));
+  const datePaul = req.fields.find(f => f.signer === paul.id && f.type === "date");
+  ({ bytes, request: req } = core.fillRequestField(bytes, req, datePaul.id, null, new Date(2026, 10, 5)));
+  assert.ok(core.keepsOriginal(sent, bytes), "remplir ne touche pas au document scellé");
+  assert.equal(core.pendingFields(req, paul.id).length, 0);
+  ({ bytes, request: req } = await core.completeSigner(forge, bytes, req, paul.id, { bits: 1024, received: "abc" }));
+  // Un ajout hors de ses cases avant le sceau de Paul serait signalé.
+  {
+    let b2 = core.annotate(sent, 0, { kind: "textbox", rect: [300, 100, 400, 120], text: "Remise 50 %" }), r2 = core.readRequest(sent);
+    ({ bytes: b2, request: r2 } = core.fillRequestField(b2, r2, sigPaul.id, tinyPng()));
+    ({ bytes: b2, request: r2 } = core.fillRequestField(b2, r2, datePaul.id, null));
+    ({ bytes: b2, request: r2 } = await core.completeSigner(forge, b2, r2, paul.id, { bits: 1024 }));
+    assert.deepEqual(core.revisionProblems(forge, b2, r2), ["Paul Martin : un ajout en page 1 ne correspond à aucune de ses cases (texte)."]);
+  }
+  assert.equal(core.requestStatus(req).text, "1 sur 2 a signé. Prochain : Léa Petit.");
+  const notes = b => core.listAnnotations(b).map(a => a.text).join("|");
+  assert.match(notes(bytes), /05\/11\/2026/);
+
+  // Léa : texte obligatoire, case cochée, paraphe.
+  const [fn, box, ini] = req.fields.filter(f => f.signer === lea.id);
+  assert.throws(() => core.fillRequestField(bytes, req, fn.id, "  "), /obligatoire/);
+  ({ bytes, request: req } = core.fillRequestField(bytes, req, fn.id, "Gérante"));
+  ({ bytes, request: req } = core.fillRequestField(bytes, req, box.id, true));
+  ({ bytes, request: req } = core.fillRequestField(bytes, req, ini.id, tinyPng()));
+  assert.match(notes(bytes), /Gérante\|X\|Paraphe/);
+  const p12 = core.readCertificate(forge, testP12(), "1234");
+  ({ bytes, request: req } = await core.completeSigner(forge, bytes, req, lea.id, { id: p12 }));
+  const st = core.requestStatus(core.readRequest(bytes));
+  assert.equal(st.complete, true);
+  assert.equal(st.text, "Terminé : les 2 signataires ont signé.");
+  assert.equal(st.signers[1].method, "certificat");
+
+  // Contrôle : trois sceaux intacts (envoi, Paul, Léa) ; Léa avec son certificat.
+  const check = core.checkRequest(forge, bytes, req);
+  assert.deepEqual(check.steps.map(s => [s.name, s.sealed, s.intact]), [["Damien", true, true], ["Paul Martin", true, true], ["Léa Petit", true, true]]);
+  assert.equal(check.steps[1].issuer, core.SEAL_ISSUER);
+  assert.equal(check.steps[2].issuer, "Jeanne Martin");
+  assert.equal(check.tampered, false);
+  const sigs = core.signatures(forge, bytes);
+  assert.equal(sigs.length, 3);
+  assert.ok(sigs.every(s => s.intact));
+
+  // Certificat d'achèvement ajouté en dernière page, et aucune retouche entre les sceaux.
+  assert.equal(core.pageInfo(bytes).length, 2);
+  const cert = text(bytes);
+  assert.match(cert, /Certificat d'achèvement de la signature/);
+  assert.match(cert, /Paul Martin <paul@exemple\.fr>/);
+  assert.match(cert, /avec son certificat : Jeanne Martin/);
+  assert.match(cert, new RegExp(req.events[0].hash));
+  assert.deepEqual(core.revisionProblems(forge, bytes, req), []);
+  // Un commentaire ajouté ensuite est signalé, sans gravité.
+  const commented = core.annotate(bytes, 0, { kind: "note", at: [300, 300], text: "Vu" });
+  assert.deepEqual(core.revisionProblems(forge, commented, req), ["1 commentaire ajouté après la dernière signature (le contenu signé n'a pas changé)."]);
+
+  // Un octet du document envoyé modifié : le contrôle le voit.
+  const bad = bytes.slice(), k = latin1(bytes).indexOf("Dupont");
+  if (k > 0) bad[k] = 0x58; else bad[400] ^= 1;
+  assert.equal(core.checkRequest(forge, bad, req).tampered, true);
+
+  if (process.env.MIM_DEMANDE) (await import("node:fs")).writeFileSync(process.env.MIM_DEMANDE, bytes);
+  // Une fois tout signé, plus personne ne peut signer.
+  assert.equal(core.canSign(req, lea.id).ok, false);
+});
+
+test("demande de signature : message d'e-mail et lien mailto", () => {
+  const req = core.newRequest({ title: "Bail", sender: { name: "Damien", email: "d@x.fr" }, signers: [{ name: "Paul", email: "paul@x.fr" }] });
+  core.addRequestField(req, { signer: req.signers[0].id, type: "signature", page: 0, at: [100, 100] });
+  const m = core.requestEmail(req, req.signers[0], { fileName: "Bail - à signer.pdf" });
+  assert.equal(m.to, "paul@x.fr");
+  assert.equal(m.subject, "Document à signer : Bail");
+  assert.match(m.body, /Damien vous demande de signer le document « Bail » \(1 case à remplir\)/);
+  assert.match(m.body, /lecteur-pdf-libre\.vercel\.app/);
+  const url = core.mailtoUrl(m);
+  assert.match(url, /^mailto:paul@x\.fr\?subject=Document%20%C3%A0%20signer/);
+  assert.match(url, /%0D%0A/);
+  const back = core.requestEmail(req, null, { fileName: "Bail - signé.pdf", toSender: true });
+  assert.equal(back.to, "d@x.fr");
+});
+
+test("sceau Mim : nom accentué lisible, émetteur reconnu", () => {
+  const id = core.sealIdentity(forge, { name: "Hélène Durand", email: "helene@exemple.fr" }, { bits: 1024 });
+  const [sig] = core.signatures(forge, core.signPdf(forge, facture(), id, { reason: "essai" }));
+  assert.equal(sig.name, "Hélène Durand");
+  assert.equal(sig.issuer, core.SEAL_ISSUER);
+  assert.equal(sig.intact, true);
+});

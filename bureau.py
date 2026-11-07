@@ -431,6 +431,16 @@ class Api:
         import webbrowser
         return webbrowser.open("https://copilot.microsoft.com/")
 
+    def ouvrir_lien(self, url):
+        """Ouvre un e-mail prêt à envoyer (lien mailto:) dans la messagerie de l'ordinateur."""
+        if not isinstance(url, str) or not url.startswith("mailto:"):
+            return False
+        if sys.platform == "win32":
+            os.startfile(url)
+            return True
+        import webbrowser
+        return webbrowser.open(url)
+
     def enregistrer(self, nom, contenu_base64):
         import webview
         fmt = nom.rsplit(".", 1)[-1].lower()

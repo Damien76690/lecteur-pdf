@@ -82,12 +82,14 @@ function setBytes(bytes) {
   doc.annots = core.listAnnotations(bytes);
   doc.outline = core.outline(doc.mu);
   doc.fieldList = core.fields(doc.mu);
+  doc.request = core.readRequest(bytes);
   doc.version++;
   found = null; $("#find-count").textContent = "";
   render();
   refreshList();
   refreshSide();
   scanTitles();
+  refreshRequestTools();
 }
 
 function setTitle(text) {
@@ -105,7 +107,7 @@ const plural = (n, word) => `${n} ${word}${n > 1 ? "s" : ""}`;
 function showInfo() {
   const parts = [], info = $("#info");
   let level = "";
-  if (doc.signed) {
+  if (doc.signed && !doc.request?.events?.length) {
     const sum = doc.sigSummary;
     if (!core.keepsOriginal(doc.original, doc.bytes)) {
       level = "bad";
@@ -119,10 +121,16 @@ function showInfo() {
   if (doc.fields) parts.push(`Ce document contient ${plural(doc.fields, "champ")} de formulaire : cliquez dedans pour les remplir.`);
   if (doc.protection) parts.push("🔒 Le PDF enregistré sera protégé par " + (doc.protection.password ? "mot de passe." : "des restrictions (impression, copie ou modification).") +
     " Fichier › Protéger pour changer.");
+  const rq = doc.request && core.requestStatus(doc.request);
+  if (rq?.sent) parts.push(rq.complete ? `✉ Demande de signature « ${doc.request.title} » : ${rq.text}`
+    : `✉ ${doc.request.sender.name || doc.request.sender.email} demande de signer ce document : ${rq.text}`);
+  else if (rq) parts.push(`✉ Demande de signature en préparation : placez les cases de ${plural(rq.total, "signataire")}, puis cliquez sur Signer › Envoyer.`);
   const scan = core.needsOcr(doc.pages);
   if (scan) parts.push("Ce PDF est un scan : son texte n'est pas encore sélectionnable, ni modifiable, ni convertible.");
   info.textContent = parts.join(" ");
-  if (doc.signed) info.appendChild(Object.assign(document.createElement("button"), { textContent: "Détails", onclick: showCertSignatures }));
+  if (rq?.sent && !rq.complete && !doc.rqMe) info.appendChild(Object.assign(document.createElement("button"), { textContent: "Signer les cases qui m'attendent", className: "primary", onclick: startSigning }));
+  if (rq?.sent) info.appendChild(Object.assign(document.createElement("button"), { textContent: "Suivi", onclick: showRequestStatus }));
+  if (doc.signed && !rq?.sent) info.appendChild(Object.assign(document.createElement("button"), { textContent: "Détails", onclick: showCertSignatures }));
   if (scan) info.appendChild(Object.assign(document.createElement("button"), { textContent: "Reconnaître le texte",
     title: "Lance la reconnaissance du texte (OCR) : nécessaire avant de corriger, rechercher ou convertir un scan", onclick: () => $("#ocr").click() }));
   info.className = level;
@@ -205,6 +213,7 @@ function showDoc() {
   $("#find").value = ""; $("#find-count").textContent = ""; found = null;
   showInfo();
   drawTabs();
+  refreshRequestTools();
   if ($('[data-tab="fichier"]').classList.contains("on")) $('[data-tab="accueil"]').click();
 }
 
@@ -232,7 +241,7 @@ function closeDoc(d = doc) {
   $("#pages").innerHTML = ""; $("#list").hidden = true;
   $("#drop").hidden = false; $("#docname").textContent = ""; $("#count").textContent = ""; $("#goto").value = "";
   $("#info").hidden = true; closeSide(); found = null; $("#find").value = ""; $("#find-count").textContent = "";
-  setTitle("Mim PDF"); drawTabs(); showRecents();
+  setTitle("Mim PDF"); drawTabs(); showRecents(); refreshRequestTools();
   setButtons(false); say("Ouvrez un PDF pour commencer.");
 }
 
@@ -332,6 +341,7 @@ function drawPage(div) {
     div.appendChild(formLayer(i));
     if (refocus) { const el = div.querySelector(`[data-field="${refocus}"]`); if (el) { refocus = null; el.focus({ preventScroll: true }); } }
   }
+  if (!div.querySelector(".rq") && doc.request?.fields.some(f => f.page === i) && !core.requestStatus(doc.request).complete) div.appendChild(requestLayer(i));
 }
 
 // ------------------------------------------------------------ formulaires
@@ -702,14 +712,17 @@ $("#cert-file").onchange = e => {
   e.target.value = "";
 };
 
-async function startCertSign() {
+// Demande le certificat (.p12 / .pfx) et son mot de passe ; renvoie l'identité, ou null si l'utilisateur abandonne.
+// `options` : afficher motif, lieu et cadre visible (signature par certificat) ou non (sceau d'une demande de signature).
+async function askCertificate(options = true) {
   await loadScript(LIBS.forge);
   const dlg = $("#cert-dlg");
+  $$("#cert-dlg .opt").forEach(x => x.hidden = !options);
   $("#cert-pass").value = "";
   $("#cert-name").textContent = certId ? `Certificat ouvert : ${certId.name}` : certFile ? certFile.name : "";
   for (;;) {
     const ok = await new Promise(done => { dlg.onclose = () => done(dlg.returnValue === "ok"); dlg.returnValue = ""; dlg.showModal(); });
-    if (!ok) return;
+    if (!ok) return null;
     if (certFile) {
       try { certId = core.readCertificate(forge, new Uint8Array(await certFile.arrayBuffer()), $("#cert-pass").value); certFile = null; }
       catch (e) { say("Certificat : " + e.message + ".", true); continue; }
@@ -720,8 +733,12 @@ async function startCertSign() {
       say(`Le certificat de ${certId.name} n'est pas valable aujourd'hui (valable du ${certId.from.toLocaleDateString("fr-FR")} au ${certId.to.toLocaleDateString("fr-FR")}).`, true);
       certId = null; continue;
     }
-    break;
+    return certId;
   }
+}
+
+async function startCertSign() {
+  if (!await askCertificate(true)) return;
   certOptions = { reason: $("#cert-reason").value.trim(), location: $("#cert-location").value.trim() };
   if ($("#cert-visible").checked) { setMode("certsign"); say(`Certificat de ${certId.name} prêt. Cliquez à l'endroit où placer le cadre de la signature (Échap pour annuler).`); }
   else certSign(current, null);
@@ -761,6 +778,334 @@ async function showCertSignatures() {
     list.appendChild(div);
   }
   $("#sigs-dlg").showModal();
+}
+
+// ------------------------------------------------------------ faire signer à plusieurs (sans serveur)
+// La demande (signataires, cases, journal) est rangée dans le PDF (voir core.js) : le fichier circule
+// par e-mail d'un signataire au suivant, chacun l'ouvre avec Mim PDF, remplit ses cases et le scelle.
+
+const SENDER_KEY = "mim.expediteur";
+const SITE = "https://lecteur-pdf-libre.vercel.app";
+const who = s => s?.name || s?.email || "?";
+const rqSent = () => !!doc?.request && core.requestStatus(doc.request).sent;
+
+// Boutons du groupe « Faire signer à plusieurs » selon l'état de la demande du document affiché.
+function refreshRequestTools() {
+  const req = doc?.request, st = req && core.requestStatus(req);
+  const preparing = !!req && !st.sent;
+  $("#rq-tools").hidden = $("#rq-place").hidden = $("#rq-send").hidden = !preparing;
+  $("#rq-sign").hidden = !st?.sent || st.complete;
+  $("#rq-status").hidden = !req;
+  $("#rq-prepare").hidden = !!st?.sent;
+  $("#rq-prepare").lastChild.textContent = preparing ? "Signataires" : "Faire signer";
+  if (preparing) {
+    const sel = $("#rq-signer"), keep = sel.value;
+    sel.innerHTML = "";
+    for (const s of req.signers) sel.add(new Option(who(s), s.id));
+    if (req.signers.some(s => s.id === keep)) sel.value = keep;
+  }
+  if (!preparing && mode === "rqfield") setMode("read");
+}
+
+// Calque des cases de la demande sur la page `i`.
+function requestLayer(i) {
+  const req = doc.request, p = doc.pages[i], layer = document.createElement("div");
+  layer.className = "rq";
+  const sent = core.requestStatus(req).sent;
+  for (const f of req.fields.filter(f => f.page === i)) {
+    const s = req.signers.find(x => x.id === f.signer), [x0, y0, x1, y1] = f.rect;
+    const el = document.createElement("div");
+    el.dataset.rq = f.id;
+    el.style.setProperty("--c", s?.color || "#6b7280");
+    Object.assign(el.style, { left: 100 * x0 / p.w + "%", top: 100 * y0 / p.h + "%", width: 100 * (x1 - x0) / p.w + "%", height: 100 * (y1 - y0) / p.h + "%" });
+    const label = document.createElement("span");
+    label.textContent = (f.done ? "✓ " : "") + (f.label || core.FIELD_TYPES[f.type].label) + " · " + who(s);
+    el.appendChild(label);
+    el.title = `${core.FIELD_TYPES[f.type].label} à remplir par ${who(s)}` + (f.label ? ` : ${f.label}` : "") + (f.done ? " (fait)" : "");
+    if (f.done) el.classList.add("done");
+    if (!sent) {
+      const x = Object.assign(document.createElement("button"), { type: "button", textContent: "✖", title: "Retirer cette case" });
+      x.onclick = e => { e.stopPropagation(); removeRequestField(f.id); };
+      el.appendChild(x);
+    } else if (doc.rqMe === f.signer && !f.done) {
+      el.classList.add("mine");
+      if (doc.rqCur === f.id) el.classList.add("cur");
+      el.onclick = () => fillRequestField(f.id);
+    }
+    layer.appendChild(el);
+  }
+  return layer;
+}
+
+// Écrit la demande modifiée dans le PDF (annulable par Ctrl+Z).
+const saveRequest = (req, message, done) => edit(message, b => core.writeRequest(b, req), done);
+
+async function prepareRequest() {
+  if (!doc) return;
+  if (rqSent()) return showRequestStatus();
+  let sender = {};
+  try { sender = JSON.parse(localStorage.getItem(SENDER_KEY)) || {}; } catch {}
+  const req = doc.request ? structuredClone(doc.request) : core.newRequest({ title: doc.name, sender });
+  $("#rq-title").value = req.title;
+  $("#rq-from-name").value = req.sender.name; $("#rq-from-email").value = req.sender.email;
+  $("#rq-ordered").checked = req.ordered;
+  const list = $("#rq-signers");
+  list.innerHTML = "";
+  const row = (s = {}) => {
+    const r = document.createElement("div");
+    r.className = "srow"; r.dataset.id = s.id || "";
+    r.innerHTML = `<i class="dot-c"></i><input type="text" placeholder="Nom" autocomplete="off"><input type="email" placeholder="E-mail" autocomplete="off"><button type="button" title="Retirer ce signataire">✖</button>`;
+    r.style.setProperty("--c", s.color || core.SIGNER_COLORS[list.children.length % core.SIGNER_COLORS.length]);
+    const [name, email] = r.querySelectorAll("input");
+    name.value = s.name || ""; email.value = s.email || "";
+    r.querySelector("button").onclick = () => r.remove();
+    list.appendChild(r);
+    return name;
+  };
+  req.signers.forEach(row);
+  if (!req.signers.length) row();
+  $("#rq-add").onclick = () => row().focus();
+  $("#rq-add-me").onclick = () => row({ name: $("#rq-from-name").value.trim(), email: $("#rq-from-email").value.trim() });
+  const dlg = $("#rq-dlg");
+  for (;;) {
+    const ok = await new Promise(done => { dlg.onclose = () => done(dlg.returnValue === "ok"); dlg.returnValue = ""; dlg.showModal(); });
+    if (!ok) return say("Préparation annulée.");
+    const rows = $$("#rq-signers .srow").map(r => { const [n, e] = r.querySelectorAll("input"); return { id: r.dataset.id, name: n.value.trim(), email: e.value.trim() }; })
+      .filter(r => r.name || r.email);
+    const name = $("#rq-from-name").value.trim(), email = $("#rq-from-email").value.trim();
+    const bad = rows.find(r => !r.name) ? "Donnez un nom à chaque signataire."
+      : !rows.length ? "Ajoutez au moins un signataire."
+      : !name ? "Indiquez votre nom (il apparaît dans l'e-mail envoyé aux signataires)."
+      : [email, ...rows.map(r => r.email)].some(e => e && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e)) ? "Une adresse e-mail semble incorrecte." : "";
+    if (bad) { say(bad, true); continue; }
+    req.title = $("#rq-title").value.trim() || doc.name;
+    req.sender = { name, email };
+    req.ordered = $("#rq-ordered").checked;
+    const old = req.signers;
+    req.signers = [];
+    for (const r of rows) {
+      const prev = old.find(s => s.id && s.id === r.id);
+      if (prev) req.signers.push(Object.assign(prev, { name: r.name, email: r.email }));
+      else core.addSigner(req, r);
+    }
+    req.signers.forEach((s, k) => s.color = core.SIGNER_COLORS[k % core.SIGNER_COLORS.length]);
+    req.fields = req.fields.filter(f => req.signers.some(s => s.id === f.signer));
+    try { localStorage.setItem(SENDER_KEY, JSON.stringify(req.sender)); } catch {}
+    await saveRequest(req, "Préparation…", () => `Demande prête pour ${plural(req.signers.length, "signataire")}.`);
+    refreshRequestTools();
+    setMode("rqfield");
+    return say(`Placez les cases : choisissez le signataire et le type de case, puis cliquez sur la page (ou tracez un cadre). Ensuite, cliquez sur « Envoyer ».`);
+  }
+}
+
+async function placeRequestField(i, p, a, b, tiny) {
+  const req = structuredClone(doc.request), type = $("#rq-type").value, signer = $("#rq-signer").value;
+  if (!req || rqSent()) return;
+  let label = "";
+  if (type === "text" || type === "checkbox") {
+    label = (await askText(type === "text" ? "Que doit écrire le signataire ? (exemple : Fonction, Ville, Lu et approuvé)" : "Texte de la case à cocher (exemple : J'accepte les conditions)", "Placer")).trim();
+    if (!label && type === "checkbox") return say("Case à cocher annulée : indiquez ce qu'elle signifie.", true);
+  }
+  const f = core.addRequestField(req, { signer, type, page: i, label, size: p, ...(tiny ? { at: [a[0], a[1]] } : { rect: [...a, ...b] }) });
+  const s = req.signers.find(x => x.id === signer);
+  await saveRequest(req, "Ajout de la case…", `${core.FIELD_TYPES[f.type].label} placée pour ${who(s)}. Ctrl+Z pour annuler.`);
+  setMode("rqfield");
+}
+
+function removeRequestField(id) {
+  const req = structuredClone(doc.request);
+  core.removeRequestField(req, id);
+  saveRequest(req, "Retrait de la case…", "Case retirée.");
+}
+
+// Sceau d'une étape : certificat de l'utilisateur, ou sceau Mim (null). undefined = abandon.
+async function chooseSeal(title, text, okLabel) {
+  const dlg = $("#rq-seal-dlg");
+  $("#rq-seal-title").textContent = title; $("#rq-seal-text").textContent = text; $("#rq-seal-ok").textContent = okLabel;
+  const ok = await new Promise(done => { dlg.onclose = () => done(dlg.returnValue === "ok"); dlg.returnValue = ""; dlg.showModal(); });
+  if (!ok) return undefined;
+  if ($("#rq-seal-dlg input[name=rq-seal]:checked").value === "seal") { await loadScript(LIBS.forge); return null; }
+  return (await askCertificate(false)) || undefined;
+}
+
+async function sendRequest() {
+  const req = doc.request;
+  const problems = core.requestProblems(req);
+  if (problems.length) return say("Avant d'envoyer : " + problems.join(" ; ") + ".", true);
+  const st = core.requestStatus(req);
+  const id = await chooseSeal("Envoyer pour signature",
+    `${plural(req.fields.length, "case")} pour ${st.signers.map(s => `${who(s)} (${s.fields})`).join(", ")}` +
+    `${req.ordered ? ", dans cet ordre" : ""}. Mim PDF va sceller le document préparé : on ne pourra plus déplacer les cases, et toute retouche du contenu sera visible.`, "Sceller et envoyer");
+  if (id === undefined) return say("Envoi annulé.");
+  setMode("read");
+  let first = null;
+  await edit("Scellement du document…", async b => {
+    await new Promise(r => setTimeout(r, 30));    // le message s'affiche avant le calcul (quelques secondes)
+    const r = await core.sendRequest(forge, b, req, { id });
+    first = core.requestStatus(r.request).next;
+    return r.bytes;
+  }, "Document scellé et prêt à envoyer.");
+  if (first) await shareStep(first);
+}
+
+// Après une étape : enregistrer le PDF puis ouvrir l'e-mail pour le destinataire suivant (ou l'expéditeur).
+async function shareStep(to, toSender = false) {
+  const req = doc.request, st = core.requestStatus(req);
+  const fileName = core.fileName(`${req.title || doc.name} - ${st.complete ? "signé" : "à signer"}`) + ".pdf";
+  const mail = core.requestEmail(req, to, { fileName, site: SITE, toSender });
+  const dest = toSender ? who(req.sender) : who(to);
+  $("#rq-next-title").textContent = toSender ? "Tout le monde a signé" : `À ${dest} de signer`;
+  $("#rq-next-text").textContent = toSender
+    ? `${st.text} Renvoyez le document signé à ${dest}${req.sender.email ? ` (${req.sender.email})` : ""}.`
+    : `Envoyez le PDF à ${dest}${to.email ? ` (${to.email})` : ""} : ses cases l'attendent, à remplir avec Mim PDF.`;
+  $("#rq-next-steps").innerHTML = "";
+  for (const t of [`Enregistrez le PDF (« ${fileName} »).`, "Votre messagerie s'ouvre avec le message déjà rédigé.",
+                   "Joignez-y le PDF enregistré (trombone), puis envoyez. Une messagerie ne permet pas à un logiciel de joindre le fichier lui-même."])
+    $("#rq-next-steps").appendChild(Object.assign(document.createElement("li"), { textContent: t }));
+  const mailtext = `À : ${mail.to}\nObjet : ${mail.subject}\n\n${mail.body}`;
+  $("#rq-next-copy").onclick = async () => say((await copyText(mailtext)) ? "Message copié : collez-le dans votre messagerie." : "La copie a échoué.", "ok");
+  $("#rq-next-go").onclick = async () => {
+    const done = await download(doc.protection ? core.protect(doc.bytes, doc.protection) : doc.bytes, fileName, "application/pdf");
+    if (/annulé/.test(done)) return say(done);
+    doc.savedAt = doc.history.length; drawTabs();
+    await openMail(core.mailtoUrl(mail));
+    say(`${done} Joignez ce PDF à l'e-mail qui vient de s'ouvrir, puis envoyez-le.`, "ok");
+  };
+  $("#rq-next-dlg").showModal();
+}
+
+async function openMail(url) {
+  const api = window.pywebview?.api;
+  if (api?.ouvrir_lien) return api.ouvrir_lien(url);
+  const a = Object.assign(document.createElement("a"), { href: url });
+  document.body.appendChild(a); a.click(); a.remove();
+}
+
+// Signataire : choisir son nom, puis remplir ses cases une à une.
+async function startSigning() {
+  const req = doc.request, st = core.requestStatus(req);
+  const open = st.signers.filter(s => core.canSign(req, s.id).ok);
+  if (!open.length) return say(st.complete ? "Tout le monde a déjà signé ce document." : "Personne ne peut signer ce document pour l'instant.", true);
+  const list = $("#rq-who-list");
+  list.innerHTML = "";
+  open.forEach((s, k) => {
+    const l = document.createElement("label");
+    l.innerHTML = `<input type="radio" name="rq-who"><i class="dot-c"></i><span></span>`;
+    l.style.setProperty("--c", s.color);
+    l.querySelector("span").textContent = `${who(s)}${s.email ? ` (${s.email})` : ""} : ${plural(s.fields, "case")}`;
+    Object.assign(l.querySelector("input"), { value: s.id, checked: k === 0 });
+    list.appendChild(l);
+  });
+  $("#rq-who-hint").textContent = `${who(req.sender)} vous demande de signer « ${req.title} ». ${st.text}` +
+    (req.ordered && st.signers.length > 1 ? " Les signataires signent dans l'ordre prévu." : "") +
+    " Mim PDF ne peut pas vérifier votre identité : choisissez votre nom (avec votre certificat, votre signature sera à votre nom).";
+  const dlg = $("#rq-who-dlg");
+  const ok = await new Promise(done => { dlg.onclose = () => done(dlg.returnValue === "ok"); dlg.returnValue = ""; dlg.showModal(); });
+  if (!ok) return;
+  doc.rqMe = $("#rq-who-list input:checked").value;
+  doc.rqReceived = await core.sha256(doc.bytes);
+  setMode("read");
+  render();
+  nextRequestField();
+}
+
+function nextRequestField() {
+  const req = doc.request, me = doc.rqMe;
+  if (!me) return;
+  const left = core.pendingFields(req, me), all = req.fields.filter(f => f.signer === me);
+  $$(".rq > div.cur").forEach(x => x.classList.remove("cur"));
+  if (!left.length) return finishSigning();
+  const f = left[0], el = $(`[data-rq="${f.id}"]`);
+  doc.rqCur = f.id;
+  if (el) { el.classList.add("cur"); el.scrollIntoView({ block: "center", behavior: "smooth" }); }
+  else goTo(f.page);
+  say(`Case ${all.length - left.length + 1} sur ${all.length} : cliquez sur la case « ${f.label || core.FIELD_TYPES[f.type].label} »${f.page !== current ? ` (page ${f.page + 1})` : ""}.`);
+}
+
+async function fillRequestField(id) {
+  const req = doc.request, f = req.fields.find(x => x.id === id);
+  if (!f || f.done || f.signer !== doc.rqMe) return;
+  let value = null;
+  if (f.type === "signature" || f.type === "initials") {
+    const kind = f.type === "signature" ? "signature" : "paraphe";
+    value = signatures[kind] || await editSignature(kind);
+    if (!value) return;
+  } else if (f.type === "text") {
+    value = (await askText(f.label ? `${f.label} :` : "Texte à écrire :", "Valider")).trim();
+    if (!value && f.required) return say("Case laissée vide : elle est obligatoire.", true);
+  } else if (f.type === "checkbox") value = confirm(`Cocher la case « ${f.label} » ?\n\nOK = cocher, Annuler = laisser vide.`);
+  await edit("Remplissage…", b => {
+    const r = core.fillRequestField(b, req, id, value);
+    return r.bytes;
+  }, "Case remplie.");
+  nextRequestField();
+}
+
+async function finishSigning() {
+  const req = doc.request, me = req.signers.find(s => s.id === doc.rqMe);
+  const id = await chooseSeal("Terminer ma signature", `Vos cases sont remplies. Mim PDF va ajouter votre signature au journal du document (« ${who(me)} a signé ») et le sceller.`, "Signer et sceller");
+  if (id === undefined) return say("Signature pas encore terminée : cliquez sur « Signer mes cases » quand vous serez prêt.");
+  let after = null;
+  await edit("Scellement de votre signature…", async b => {
+    await new Promise(r => setTimeout(r, 30));
+    const r = await core.completeSigner(forge, b, req, me.id, { id, received: doc.rqReceived });
+    after = core.requestStatus(r.request);
+    return r.bytes;
+  }, () => `Signé par ${who(me)}. ${after.text}`);
+  if (!after) return;
+  doc.rqMe = null;
+  render();
+  if (after.complete) await shareStep(null, true);
+  else await shareStep(after.next);
+}
+
+async function showRequestStatus() {
+  const req = doc.request;
+  if (!req) return;
+  const st = core.requestStatus(req);
+  $("#rq-st-title").textContent = `Suivi : ${req.title}`;
+  $("#rq-st-text").textContent = `Demandé par ${who(req.sender)}${req.sender.email ? ` (${req.sender.email})` : ""}. ${st.text}`;
+  let check = null;
+  if (st.sent) {
+    await loadScript(LIBS.forge);
+    try { check = core.checkRequest(forge, doc.bytes, req); check.problems = core.revisionProblems(forge, doc.bytes, req); } catch (e) { console.error(e); }
+  }
+  const list = $("#rq-st-list");
+  list.innerHTML = "";
+  const line = (color, title, status, cls) => {
+    const d = document.createElement("div");
+    d.className = "sig"; d.style.setProperty("--c", color);
+    d.innerHTML = "<strong></strong><br><span></span>";
+    d.querySelector("strong").textContent = title;
+    Object.assign(d.querySelector("span"), { textContent: status, className: cls });
+    list.appendChild(d);
+  };
+  const stepOf = (type, signer) => check?.steps.find(s => s.type === type && (type === "sent" || s.signer === signer));
+  const seal = s => !s ? "" : !s.sealed ? " ⚠ sceau introuvable." : s.intact === false ? " ✖ modifié après ce sceau !" :
+    s.issuer === core.SEAL_ISSUER ? " Sceau Mim intact." : ` Certificat (${s.issuer}), intact.`;
+  if (st.sent) {
+    const s = stepOf("sent"), at = req.events.find(e => e.type === "sent")?.at;
+    line("#6b7280", `Envoyé par ${who(req.sender)}`, `le ${new Date(at).toLocaleString("fr-FR")}.` + seal(s), s?.intact === false ? "bad" : "ok");
+  }
+  for (const s of st.signers) {
+    const step = stepOf("signed", s.id);
+    line(s.color, `${who(s)}${s.email ? ` (${s.email})` : ""} · ${plural(s.fields, "case")}`,
+      s.done ? `✔ A signé le ${new Date(s.at).toLocaleString("fr-FR")}${s.method === "certificat" ? " avec son certificat" : ""}.` + seal(step)
+             : st.next?.id === s.id || !req.ordered ? "⏳ À signer." : "En attente des signataires précédents.",
+      s.done ? (step?.intact === false ? "bad" : "ok") : "warn");
+  }
+  $("#rq-st-check").textContent = !st.sent ? "Demande pas encore envoyée : placez les cases puis cliquez sur « Envoyer »."
+    : !check ? ""
+    : check.tampered ? "✖ Le document a été modifié après une signature : ne vous y fiez pas et redemandez l'original."
+    : check.missing ? "⚠ Une étape du journal n'a pas de sceau : le document a peut-être été retouché avec un autre logiciel."
+    : check.problems?.length ? "⚠ À vérifier : " + check.problems.join(" ")
+    : "✔ Chaque étape est scellée, chaque signataire n'a rempli que ses cases, et rien n'a été modifié depuis." +
+      (st.complete ? " Le certificat d'achèvement est en dernière page." : "") + " Les sceaux Mim protègent le contenu mais n'attestent pas de l'identité ; un certificat, si.";
+  const resend = $("#rq-st-resend");
+  resend.hidden = !st.sent;
+  resend.textContent = st.complete ? "Renvoyer à l'expéditeur" : `Préparer l'e-mail pour ${who(st.next)}`;
+  resend.onclick = () => { $("#rq-status-dlg").close(); shareStep(st.complete ? null : st.next, st.complete); };
+  $("#rq-status-dlg").showModal();
 }
 
 // ------------------------------------------------------------ organiser les pages
@@ -1256,7 +1601,7 @@ function askText(label = "Texte à écrire :", ok = "Écrire") {
 }
 
 // Outils « glisser » (on trace une zone ou un trait) et outils « clic » (on pose quelque chose).
-const DRAG = ["erase", "table", "highlight", "underline", "strike", "ink", "rect", "ellipse", "arrow"];
+const DRAG = ["erase", "table", "highlight", "underline", "strike", "ink", "rect", "ellipse", "arrow", "rqfield"];
 const SVG = "http://www.w3.org/2000/svg";
 const drawColor = () => $("#draw-color").value, drawWidth = () => +$("#draw-width").value;
 const textSize = () => Math.min(Math.max(+$("#size").value || 12, 4), 96);
@@ -1277,8 +1622,9 @@ function attachTools(div, i, p) {
     svg.setAttribute("preserveAspectRatio", "none");
     const tag = { ink: "polyline", arrow: "line", ellipse: "ellipse" }[mode] || "rect";
     shape = svg.appendChild(document.createElementNS(SVG, tag));
-    const color = mode === "erase" ? "#dc2626" : mode === "table" ? "#16a34a" : mode === "highlight" ? $("#hl-color").value : drawColor();
-    const marker = ["highlight", "underline", "strike", "erase", "table"].includes(mode);
+    const color = mode === "erase" ? "#dc2626" : mode === "table" ? "#16a34a" : mode === "highlight" ? $("#hl-color").value
+      : mode === "rqfield" ? doc.request?.signers.find(s => s.id === $("#rq-signer").value)?.color || "#2563eb" : drawColor();
+    const marker = ["highlight", "underline", "strike", "erase", "table", "rqfield"].includes(mode);
     shape.setAttribute("fill", marker ? color : "none");
     shape.setAttribute("fill-opacity", ".3");
     shape.setAttribute("stroke", color);
@@ -1303,6 +1649,7 @@ function attachTools(div, i, p) {
     const all = pts, [a, b = a] = [pts[0], pts[pts.length - 1]];
     pts = null; svg.remove();
     const tiny = Math.abs(a[0] - b[0]) < 3 && Math.abs(a[1] - b[1]) < 3;
+    if (mode === "rqfield" && e.type !== "pointercancel") return placeRequestField(i, p, a, b, tiny || Math.abs(a[0] - b[0]) < 8 || Math.abs(a[1] - b[1]) < 6);
     if (e.type === "pointercancel" || (tiny && mode !== "highlight" && mode !== "underline" && mode !== "strike")) return;
     if (mode === "erase")
       return edit("Effacement…", bytes => core.whiteout(bytes, i, a[0], a[1], b[0], b[1]), "Zone effacée.");
@@ -1610,10 +1957,11 @@ const HINTS = { read: "Mode lecture.", text: "Cliquez sur la page à l'endroit o
                 textbox: "Cliquez à l'endroit où ajouter la zone de texte.", ink: "Dessinez à main levée sur la page.",
                 rect: "Tracez le rectangle.", ellipse: "Tracez l'ellipse.", arrow: "Tracez la flèche, de son départ vers sa pointe.",
                 stamp: "Cliquez à l'endroit où poser le tampon.", date: "Cliquez à l'endroit où écrire la date du jour.",
-                sign: "Cliquez à l'endroit où poser votre signature.", certsign: "Cliquez à l'endroit où placer le cadre de la signature électronique.", initials: "Cliquez à l'endroit où poser votre paraphe." };
+                sign: "Cliquez à l'endroit où poser votre signature.", certsign: "Cliquez à l'endroit où placer le cadre de la signature électronique.",
+                rqfield: "Cliquez sur la page pour placer une case (ou tracez un cadre pour choisir sa taille). Le signataire et le type se choisissent dans le ruban.", initials: "Cliquez à l'endroit où poser votre paraphe." };
 const NAMES = { text: "Ajouter du texte", erase: "Effacer une zone", table: "Tableau vers Excel", highlight: "Surligner", underline: "Souligner",
                 strike: "Barrer", note: "Note", textbox: "Zone de texte", ink: "Crayon", rect: "Rectangle", ellipse: "Ellipse", arrow: "Flèche",
-                stamp: "Tampon", date: "Date du jour", sign: "Signature", certsign: "Signature électronique", initials: "Paraphe" };
+                stamp: "Tampon", date: "Date du jour", sign: "Signature", certsign: "Signature électronique", rqfield: "Placer une case", initials: "Paraphe" };
 function setMode(m) {
   mode = m;
   $$("[data-mode]").forEach(x => x.classList.toggle("on", x.dataset.mode === m));
@@ -1685,6 +2033,10 @@ $("#delete-page").onclick = () => removePage(current);
 $("#blank-page").onclick = blankPage;
 $("#protect").onclick = protectDoc;
 $("#cert-sign").onclick = startCertSign;
+$("#rq-prepare").onclick = prepareRequest;
+$("#rq-send").onclick = sendRequest;
+$("#rq-sign").onclick = startSigning;
+$("#rq-status").onclick = showRequestStatus;
 $("#cert-list").onclick = showCertSignatures;
 $("#compress").onclick = compressDoc;
 $("#flatten").onclick = flattenDoc;
