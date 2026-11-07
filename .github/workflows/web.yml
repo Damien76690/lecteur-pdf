@@ -29,6 +29,21 @@ jobs:
       - run: npm i --no-save @huggingface/transformers@4.3.1
       - run: node scripts/essai-traduction.mjs
 
+  # Résumé IA dans un vrai navigateur : le worker web/ia.js avec le vrai petit modèle Qwen (processeur).
+  resume:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm i --no-save playwright@1.56.1
+      - run: npx playwright install --with-deps chromium
+      - run: node scripts/essai-resume.mjs
+
   # Outil en ligne de commande Python (pdftools.py), facultatif.
   python:
     runs-on: ubuntu-latest

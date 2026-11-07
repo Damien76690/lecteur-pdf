@@ -1291,14 +1291,39 @@ const MODELS = {
 const AI_OK = "mim-resume-ia-accepte";
 let ai = null, summarizing = false;
 
-// Tous les modèles (résumé, traduction) partagent la mémoire du moteur ONNX dans la page, limitée
-// à quelques Go : avant d'en charger un gros, on libère les autres ; et quand il manque de la mémoire
-// en cours de route (« std::bad_alloc », code 6), on recommence avec des morceaux plus courts, puis
-// avec le petit modèle sur le processeur.
-const outOfMemory = e => /bad_alloc|ERROR_CODE:\s*6\b|OrtRun|out of memory|allocation failed|RangeError/i.test(e?.message || String(e));
-async function freeAi() {
+// Le modèle de résumé tourne dans un worker à part (web/ia.js) : sa mémoire est séparée de celle
+// des traducteurs, et quand il manque de mémoire ou que son moteur tombe, on le ferme simplement
+// (worker.terminate) pour en relancer un neuf, sans jamais appeler dispose() : voir core.aiPlan.
+function freeAi() {
   const old = ai; ai = null;
-  if (old) try { await old.generator.dispose?.(); } catch {}
+  if (old) { old.dead = true; old.worker.terminate(); old.pending?.ko(new Error("annulé")); old.pending = null; }
+}
+
+// Envoie `msg` au worker et attend sa réponse (« ready » ou « done ») ; `on` reçoit les messages
+// intermédiaires (progression du téléchargement, texte produit au fil de l'eau).
+function aiCall(engine, msg, on = {}) {
+  return new Promise((ok, ko) => {
+    if (engine.dead) return ko(new Error("annulé"));
+    engine.pending = { ok, ko, on };
+    engine.worker.postMessage(msg);
+  });
+}
+
+function aiWorker(device) {
+  const worker = new Worker(new URL("ia.js", import.meta.url), { type: "module" });
+  const engine = { worker, device, pending: null };
+  const settle = (err, value) => {
+    const p = engine.pending; engine.pending = null;
+    if (!p) return;
+    if (err) { const e = new Error(err.message || String(err)); e.name = err.name || "Error"; p.ko(e); } else p.ok(value);
+  };
+  worker.onmessage = ({ data }) => {
+    if (data.type === "progress" || data.type === "token") engine.pending?.on[data.type]?.(data);
+    else if (data.type === "ready" || data.type === "done") settle(null, data.text);
+    else if (data.type === "error") settle(data);
+  };
+  worker.onerror = ev => { ev.preventDefault?.(); settle({ message: ev.message || "le moteur d'IA s'est arrêté", name: "RuntimeError" }); };
+  return engine;
 }
 
 function showSummary(title) {
@@ -1329,17 +1354,18 @@ async function gpuOk() {
 
 async function loadAi(view, device) {
   if (ai?.device === device) return ai;
-  const T = await import(TRANSFORMERS).catch(() => { throw new Error("impossible de charger l'IA (vérifiez la connexion Internet pour ce premier usage)"); });
+  freeAi();
   const m = MODELS[device], files = {};
-  const progress = p => {
-    if (p.status !== "progress" || !p.total) return;
-    files[p.file] = [p.loaded, p.total];
-    const [got, all] = Object.values(files).reduce(([a, b], [x, y]) => [a + x, b + y], [0, 0]);
-    view.state(`Téléchargement du modèle (une seule fois) : ${Math.floor(got / 1048576)} Mo sur ${Math.floor(all / 1048576)} Mo…`);
-  };
+  const engine = ai = aiWorker(device);
   view.state("Préparation de l'intelligence artificielle…");
-  const generator = await T.pipeline("text-generation", m.id, { device, dtype: m.dtype, progress_callback: progress });
-  return ai = { T, generator, device };
+  await aiCall(engine, { type: "load", device, model: m.id, dtype: m.dtype }, {
+    progress: p => {
+      files[p.file] = [p.loaded, p.total];
+      const [got, all] = Object.values(files).reduce(([a, b], [x, y]) => [a + x, b + y], [0, 0]);
+      view.state(`Téléchargement du modèle (une seule fois) : ${Math.floor(got / 1048576)} Mo sur ${Math.floor(all / 1048576)} Mo…`);
+    },
+  });
+  return engine;
 }
 
 async function aiResume() {
@@ -1361,23 +1387,17 @@ async function aiResume() {
   if (text === undefined) return;
   const name = doc.name, view = showSummary(`Résumé IA : ${name}`);
   summarizing = true;
-  let stopper = null;
-  $("#resume-dlg").onclose = () => stopper?.interrupt();
+  $("#resume-dlg").onclose = () => ai?.worker.postMessage({ type: "stop" });
   const t0 = Date.now();
   // Un essai : chargement du modèle sur `dev`, puis résumé par morceaux de `size` caractères.
   const attempt = async (dev, size) => {
     const engine = await loadAi(view, dev);
-    const { T, generator } = engine;
     const run = async (messages, label, max_new_tokens) => {
       if (!view.open()) throw new Error("annulé");
-      stopper = new T.InterruptableStoppingCriteria();
-      let out = "";
-      const streamer = new T.TextStreamer(generator.tokenizer, { skip_prompt: true, skip_special_tokens: true,
-        callback_function: t => { out += t; view.text(out); } });
       view.state(label);
-      const res = await generator(messages, { max_new_tokens, do_sample: false, streamer, stopping_criteria: stopper });
+      const text = await aiCall(engine, { type: "run", messages, max_new_tokens }, { token: t => view.text(t.text) });
       if (!view.open()) throw new Error("annulé");
-      return (res[0].generated_text.at(-1).content || out).trim();
+      return text;
     };
     const chunks = core.summaryChunks(text, size);
     if (chunks.length === 1) return run(core.summaryMessages(name, chunks[0]), "Rédaction de la synthèse…", 600);
@@ -1387,10 +1407,8 @@ async function aiResume() {
     return run(core.finalMessages(name, partials), "Rédaction de la synthèse finale…", 600);
   };
   // Plan de repli : morceaux deux fois plus courts, puis le petit modèle sur le processeur.
-  const plan = [[device, 1], [device, 0.5]];
-  if (device === "webgpu") plan.push(["wasm", 1], ["wasm", 0.5]);
+  const plan = core.aiPlan(device);
   try {
-    await freeTranslators();
     let result, k = 0;
     for (;;) {
       const [dev, scale] = plan[k];
@@ -1398,16 +1416,17 @@ async function aiResume() {
       catch (e) {
         console.error(e);
         if (e.message === "annulé" || !view.open()) throw e;
-        const oom = outOfMemory(e);
-        // Manque de mémoire : étape suivante du plan ; autre erreur sur la carte graphique : droit au processeur.
-        k = oom ? k + 1 : plan.findIndex(([d]) => d === "wasm" && d !== dev);
-        if (k < 0 || k >= plan.length) throw oom
+        const kind = core.aiErrorKind(e);
+        freeAi();                                        // worker fermé : mémoire rendue, moteur neuf au prochain essai
+        k = core.nextAttempt(plan, k, kind);
+        if (k < 0) throw kind === "oom"
           ? new Error("mémoire insuffisante sur ce PC pour résumer ce document : fermez d'autres onglets ou logiciels puis réessayez, ou résumez un extrait plus court")
+          : kind === "crash" ? new Error(`le moteur d'IA s'est arrêté (${e.message || e}) : réessayez ; si cela se reproduit, fermez d'autres logiciels ou résumez un extrait plus court`)
           : e;
-        await freeAi();
         view.text("");
-        view.state(oom ? "Mémoire insuffisante : nouvel essai avec des morceaux plus courts…"
-                       : "Carte graphique indisponible : passage au processeur…");
+        view.state(kind === "oom" ? "Mémoire insuffisante : nouvel essai avec des morceaux plus courts…"
+                 : kind === "crash" ? "Le moteur d'IA s'est arrêté : nouvel essai avec un moteur neuf…"
+                 : "Carte graphique indisponible : passage au processeur…");
       }
     }
     view.text(result);
@@ -1426,13 +1445,6 @@ async function aiResume() {
 const translators = {};
 const TRAD_TARGET = "mim-trad-cible";
 let translating = false;
-
-async function freeTranslators() {
-  for (const [id, p] of Object.entries(translators)) {
-    delete translators[id];
-    try { await (await p).dispose?.(); } catch {}
-  }
-}
 
 async function translator(id, label) {
   if (translators[id]) return translators[id];
@@ -1544,7 +1556,7 @@ async function translateDoc() {
       if (!core.LANGUAGES[src]) throw new Error("langue du document non reconnue : choisissez-la dans la liste");
       if (src === tgt) throw new Error(`ce document est déjà en ${core.LANGUAGES[tgt].name}`);
       const target = core.LANGUAGES[tgt].name;
-      await freeAi();                                    // le modèle de résumé libère sa mémoire pour les traducteurs
+      freeAi();                                          // le worker de résumé est fermé : sa mémoire revient aux traducteurs
       const translate = await translationEngine(src, tgt);
       let back = null;
       const reverse = async list => (back ??= await translationEngine(tgt, src))(list);
