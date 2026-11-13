@@ -8,6 +8,7 @@
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icone-180.png">
 <meta name="theme-color" content="#4338ca">
+<link rel="manifest" href="manifest.webmanifest">
 <style>
   :root { --bg:#f3f4f6; --panel:#fff; --text:#1f2937; --muted:#6b7280; --accent:#2563eb; --border:#d1d5db; }
   * { box-sizing:border-box; }
@@ -244,6 +245,27 @@
   #recent { max-width:220px; }
   footer { text-align:center; color:var(--muted); font-size:12px; padding:0 12px 24px; }
   footer a { color:inherit; }
+  /* Téléphone (Android…) : un ruban compact sur une seule ligne qui défile du doigt, la page à la largeur de l'écran. */
+  .mob { display:none; }
+  @media (max-width:700px) {
+    .desk { display:none; } .mob { display:inline; }
+    .top { padding:4px 6px 0; gap:4px; scrollbar-width:none; }
+    .top h1 { font-size:0; margin:0 2px 0 0; } .top h1 img { width:28px; height:28px; }
+    .tabs button { padding:8px 10px; font-size:14px; }
+    #docname { display:none; }
+    .ribbon section { flex-wrap:nowrap; height:auto; min-height:0; width:max-content; padding:4px 4px 2px; }
+    .group { padding:0 4px; }
+    .gl { display:none; }
+    button.big, label.btn.big { min-width:56px; font-size:11.5px; padding:2px 4px; gap:1px; }
+    .ic { font-size:20px; line-height:24px; }
+    #find { width:130px; } #zoom { width:118px; }
+    #pages { padding:6px 4px 60px; gap:14px; }
+    #drop { margin:12px 10px; padding:20px 14px; }
+    #drop .open-main { font-size:16px; padding:12px 20px; }
+    #msg { padding:4px 8px; } #msg-bar { width:90px; }
+    #side { width:auto; right:8px; }
+    dialog { max-width:96vw; }
+  }
 </style>
 </head>
 <body>
@@ -457,13 +479,15 @@
   <div id="msg" role="status" aria-live="polite" aria-atomic="true"><span id="msg-text">Chargement…</span><progress id="msg-bar" max="1" hidden></progress></div>
 </header>
 <div id="drop">
-  <label class="btn primary open-main">📂 Ouvrir un PDF… (Ctrl+O)<input class="open" type="file" accept="application/pdf,.pdf,image/png,image/jpeg" multiple hidden></label>
-  <p>ou glissez un fichier PDF ici.</p>
-  <p><strong>Vos fichiers restent sur votre ordinateur</strong> : rien n'est envoyé sur Internet.</p>
+  <label class="btn primary open-main">📂 Ouvrir un PDF…<span class="desk"> (Ctrl+O)</span><input class="open" type="file" accept="application/pdf,.pdf,image/png,image/jpeg" multiple hidden></label>
+  <p class="desk">ou glissez un fichier PDF ici.</p>
+  <p><strong>Vos fichiers restent sur votre <span class="desk">ordinateur</span><span class="mob">appareil</span></strong> : rien n'est envoyé sur Internet.</p>
+  <p id="installer-box" hidden><button id="installer" class="primary">📲 Installer Mim PDF sur cet appareil</button><br>
+    <small>Il apparaîtra avec vos applications et fonctionnera même sans Internet.</small></p>
   <p class="caps">Lire · Surligner et commenter · Corriger un texte · Convertir en Word, Excel · Signer · Traduire · Résumer</p>
   <button data-sample="facture">Essayer avec une facture d'exemple</button>
   <button data-sample="facture-scannee">… ou une facture scannée</button>
-  <p class="hint">Raccourcis : Ctrl+O ouvrir · Ctrl+F rechercher · Ctrl+S enregistrer · Ctrl+molette zoom · F4 panneau · Échap quitter un outil</p>
+  <p class="hint desk">Raccourcis : Ctrl+O ouvrir · Ctrl+F rechercher · Ctrl+S enregistrer · Ctrl+molette zoom · F4 panneau · Échap quitter un outil</p>
   <div id="recents" hidden></div>
 </div>
 <main>

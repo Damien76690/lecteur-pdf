@@ -1,0 +1,29 @@
+{
+  "id": "/",
+  "name": "Mim PDF",
+  "short_name": "Mim PDF",
+  "description": "Lire, annoter, corriger, signer un PDF et le convertir en Word ou Excel. Vos fichiers restent sur votre appareil.",
+  "lang": "fr",
+  "start_url": "/?source=appli",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f3f4f6",
+  "theme_color": "#4338ca",
+  "categories": ["productivity", "utilities"],
+  "icons": [
+    { "src": "icone-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icone-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icone-masque-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "share_target": {
+    "action": "/partage",
+    "method": "POST",
+    "enctype": "multipart/form-data",
+    "params": { "files": [{ "name": "fichiers", "accept": ["application/pdf", ".pdf", "image/png", "image/jpeg"] }] }
+  },
+  "file_handlers": [
+    { "action": "/?source=fichier", "accept": { "application/pdf": [".pdf"] } }
+  ],
+  "launch_handler": { "client_mode": ["focus-existing", "auto"] }
+}
