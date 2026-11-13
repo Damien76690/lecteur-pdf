@@ -63,6 +63,17 @@ Les commandes sont rangées dans des onglets, comme dans Word : **Fichier**, **A
 
 **Faire signer à plusieurs, sans serveur** : la demande (signataires, cases, journal) voyage dans le PDF lui-même. À chaque étape (envoi, puis chaque signataire), Mim PDF ajoute une signature électronique à la suite du fichier : celle du certificat de la personne si elle en a un, sinon un « sceau Mim » créé pour l'occasion, qui protège le contenu sans attester de l'identité. Toute retouche ultérieure est détectée, dans Mim PDF comme dans Adobe Reader. Sans serveur, il n'y a ni rappel automatique, ni accusé de lecture, ni vérification par SMS ; l'e-mail est préparé dans votre messagerie, il reste à y joindre le PDF.
 
+## Sur un téléphone Android (Google Pixel, Samsung…)
+
+Mim PDF s'installe comme une application, gratuitement, sans passer par le Play Store :
+
+1. Sur le téléphone, ouvrez **Chrome** à l'adresse https://lecteur-pdf-libre.vercel.app
+2. Touchez le bouton **📲 Installer Mim PDF sur cet appareil** (ou le menu **⋮** de Chrome, puis **Ajouter à l'écran d'accueil → Installer**).
+3. L'icône du chat apparaît avec vos applications. Mim PDF s'ouvre en plein écran et **fonctionne sans Internet**.
+
+Pour ouvrir un PDF reçu (Gmail, WhatsApp, Fichiers…) : touchez **Partager**, puis **Mim PDF**.
+Les fichiers enregistrés vont dans le dossier **Téléchargements**. Les mises à jour se font toutes seules.
+
 ## Application Windows (le plus simple)
 
 1. Téléchargez **[MimPDF-installation.exe](https://github.com/Damien76690/lecteur-pdf/releases/latest/download/MimPDF-installation.exe)**.

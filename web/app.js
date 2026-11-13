@@ -2228,6 +2228,58 @@ $$("label.btn:has(input[type=file])").forEach(l => l.addEventListener("click", e
   api.ouvrir();
 }));
 
+// ------------------------------------------------------------ application installable (Android, ordinateur)
+
+// Le site s'installe comme une application : icône parmi les applications, ouverture sans Internet,
+// « Partager → Mim PDF » depuis une autre application. Pas dans l'application Windows (elle a déjà tout).
+const appliWindows = location.hostname === "127.0.0.1" || !!window.pywebview;
+if ("serviceWorker" in navigator && !appliWindows && location.protocol.startsWith("http")) {
+  const avaitUnControleur = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.register("sw.js").catch(e => console.warn("mode hors ligne indisponible", e));
+  // Une nouvelle version vient d'être enregistrée sur l'appareil : on recharge si rien n'est ouvert.
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (!avaitUnControleur) return;
+    if (!docs.length) location.reload();
+    else say("Une nouvelle version de Mim PDF est prête : elle s'appliquera à la prochaine ouverture.");
+  });
+}
+let invitation = null;
+addEventListener("beforeinstallprompt", e => {
+  e.preventDefault(); invitation = e;
+  $("#installer-box").hidden = false;
+});
+$("#installer").onclick = async () => {
+  if (!invitation) return;
+  invitation.prompt();
+  const { outcome } = await invitation.userChoice;
+  invitation = null; $("#installer-box").hidden = true;
+  if (outcome === "accepted") say("Mim PDF est installé : retrouvez-le avec vos applications.", "ok");
+};
+addEventListener("appinstalled", () => { $("#installer-box").hidden = true; });
+
+// Fichiers reçus par « Partager → Mim PDF » (Android) : le service worker les a gardés de côté.
+async function fichiersPartages() {
+  const n = Number(new URLSearchParams(location.search).get("partage"));
+  if (!n || !("caches" in window)) return;
+  history.replaceState(null, "", location.pathname);
+  const cache = await caches.open("mim-partage");
+  for (let i = 0; i < n; i++) {
+    const r = await cache.match(`/partage/${i}`);
+    if (!r) continue;
+    await openAny(new Uint8Array(await r.arrayBuffer()), decodeURIComponent(r.headers.get("X-Nom") || "document.pdf"));
+    await cache.delete(`/partage/${i}`);
+  }
+}
+// PDF ouvert avec Mim PDF depuis le système (ordinateur ; Android quand le navigateur le permet).
+function fichiersLances() {
+  window.launchQueue?.setConsumer(async params => {
+    for (const h of params.files || []) {
+      const f = await h.getFile();
+      await openAny(new Uint8Array(await f.arrayBuffer()), f.name);
+    }
+  });
+}
+
 // ------------------------------------------------------------ démarrage
 
 document.body.className = "mode-read";
@@ -2240,6 +2292,8 @@ try {
   ready = true;
   say("Ouvrez un PDF pour commencer.");
   window.mimFichiersDemandes();
+  fichiersLances();
+  await fichiersPartages();
 } catch (e) {
   console.error(e);
   say("Le lecteur n'a pas pu se charger. Vérifiez votre connexion Internet puis rechargez la page.", true);

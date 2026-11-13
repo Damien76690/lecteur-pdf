@@ -2,7 +2,8 @@
 // libres copiées depuis node_modules (aucune dépendance à un CDN, fonctionne hors ligne).
 // Usage : npm ci && npm run build            (site dans dist/, publié sur Vercel)
 //         npm run build -- build/site   (site embarqué dans l'application Windows)
-import { cpSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { makeExamples } from "./exemples.mjs";
 
 const out = process.argv[2] || "dist";
@@ -31,4 +32,15 @@ for (const [dst, src] of Object.entries(files)) {
 }
 mkdirSync(`${out}/exemples`);
 for (const [name, bytes] of Object.entries(await makeExamples())) writeFileSync(`${out}/exemples/${name}`, bytes);
-console.log(`Site prêt dans ${out}/`);
+
+// Application installable (Android, ordinateur) : le service worker garde une copie de tous les
+// fichiers du lecteur ; son numéro de version change dès qu'un fichier change.
+const all = readdirSync(out, { recursive: true, withFileTypes: true }).filter(e => e.isFile())
+  .map(e => `${e.parentPath ?? e.path}/${e.name}`.slice(out.length + 1).replaceAll("\\", "/"))
+  .filter(f => f !== "sw.js" && f !== "version.json").sort();
+const hash = createHash("sha256");
+for (const f of all) hash.update(f).update(readFileSync(`${out}/${f}`));
+const list = ["./", ...all.filter(f => f !== "index.html")];
+writeFileSync(`${out}/sw.js`, readFileSync(`${out}/sw.js`, "utf8")
+  .replace("__VERSION__", hash.digest("hex").slice(0, 12)).replace("__FICHIERS__", JSON.stringify(list)));
+console.log(`Site prêt dans ${out}/ (${list.length} fichiers gardés pour le mode hors ligne)`);
